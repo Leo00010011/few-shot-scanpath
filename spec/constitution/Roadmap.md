@@ -3,7 +3,8 @@
 > Constitution file 3 of 3. Read together with [Mission.md](Mission.md) and [TechStack.md](TechStack.md).
 > Last updated: 2026-09-08
 >
-> **Current phase: F1 — Reproduce the OSIE baseline.** Nothing else starts until F1 produces numbers.
+> **Current phase: F1 — Reproduce the COCO-FreeView baseline.** Nothing else starts until F1 produces
+> numbers. The preflight tooling and the run script are built and tested; the cluster run is pending.
 >
 > **Also live: OPEN-5.** F2's bridge is built and passing its own tests, but running it against
 > the real EVE bundle showed the bundle cannot supply the subject/stimulus structure the ISP
@@ -16,7 +17,7 @@
 | ID | Feature | Status | Blocked by |
 |---|---|---|---|
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
-| F1 | Reproduce OSIE eval baseline on the cluster | ▶ NEXT | — |
+| F1 | Reproduce the **COCO-FreeView** eval baseline on the cluster | ◐ TOOLING BUILT (2026-09-08), awaiting cluster run | GPU allocation |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ◐ BUILT (2026-09-08), blocked on data | **OPEN-5** |
 | F3 | Subject embeddings for our subjects | ⏸ TODO | F2, **OPEN-2**, **OPEN-5** |
 | F4 | Feature extraction for our stimuli | ⏸ TODO | F2, **OPEN-5**, **OPEN-6** |
@@ -34,7 +35,7 @@ Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸
         F0 constitution
              │
              ▼
-        F1 OSIE baseline ──────────────┐
+     F1 COCO-FV baseline ──────────────┐
              │                         │
              │  (proves env + metrics) │
              ▼                         ▼
@@ -60,29 +61,67 @@ OPEN-6└───────┬───────┘                │
 
 ## 3. Features
 
-### F1 — Reproduce the OSIE eval baseline on the cluster ▶ NEXT
+### F1 — Reproduce the COCO-FreeView eval baseline on the cluster ◐ TOOLING BUILT
+
+Spec: [`spec/2026-09-08-cocofv-baseline-on-cluster/`](../2026-09-08-cocofv-baseline-on-cluster/)
+(requirements · plan · validation). Satisfies D1, D5, D6, D7, D8.
 
 **Why first:** it is the only way to prove the environment, the checkpoints, and the frozen metric code all
 work *before* our data is in the picture. Every later failure then has an unambiguous cause.
 
-- [ ] Build the `isp` conda env on the cluster from `ISP/environment.yml`; record what deviates from the
-      pin list in [TechStack.md](TechStack.md) §1.
-- [ ] Stage the OSIE stimuli (800×600 `.jpg`) into the path `--img_dir` points at.
-- [ ] Place `weights/OSIE-*/OSIE/checkpoint_best.pth` at
-      `ISP/OSIE/GazeformerISP/src/assets/OSIE-ex-10to15/checkpoints/checkpoint_best.pth`, and the
-      `*_user_embedding.pt` files where `--user_emb_path` expects them. **Verify actual on-disk case**
-      of `OSIE-ex-10to15` vs `osie-ex-10to15` and `user` vs `subject` in the embedding filenames.
-- [ ] Run Stage B (`preprocess/feature_extractor.py`) to produce `src/data/image_features/*.pth` and
-      `src/data/embeddings.npy`.
-- [ ] Run the query-set demo:
-      `CUDA_VISIBLE_DEVICES=0 python src/test.py --fewshot_subject 10 11 12 13 14`
-- [ ] Record SM / MM / SED and the full metric block; compare against the paper's OSIE numbers.
-- [ ] **Decide and document** what to do about the `if i_batch > 100: break` cap in `test.py`
-      (TechStack §5) — is the published number computed over 101 images or the full test split?
-- [ ] Confirm the shipped `result/git-osie-useremb-ex-10to15/log/prediction.json` matches the schema our
-      re-scorer (F6) will assume.
+**Why COCO-FreeView and not OSIE:** its query set is 3 unseen subjects — the same order of magnitude as
+the cohort OPEN-5 currently permits on the EVE bundle (2) — so if the retrieval block degenerates at
+small `subject_num` we learn it here, on data whose correct answer is published. Its stimuli are
+photographic COCO scenes, closer to EVE's. And its `test.py` carries **no** `if i_batch > 100: break`
+cap (verified), so the "101 images or the full split?" question that hung over the OSIE checklist does
+not arise at all.
 
-**Done when:** OSIE numbers are reproduced within sampling noise and the exact command + env are recorded.
+Built 2026-09-08 (CPU, Windows dev machine):
+
+- [x] `tools/cocofv_prep/` — `normalize_fixations.py` (FR3.3), `check_fixations.py` (the equal-subject
+      invariant, FR3.5c — the check that stops a ragged image silently misaligning every subsequent
+      image against the wrong ground truth), `check_features.py` (FR4.6). 31/31 pytest tests pass.
+- [x] `bash/test_cocofv.sh` — the single `sbatch` script, all tunables overridable from the environment.
+- [x] FR10.7 settled without a GPU: `evaltools/scanmatch.py` **and**
+      `evaltools/visual_attention_metrics.py` are both byte-identical between the OSIE and COCO_FV
+      branches. Only `evaluation.py` has drifted — see [TechStack.md](TechStack.md) §4.2.
+- [x] FR5.4 settled: the checked-in `ISP/COCO_FV/.../src/embeddings.npy` already satisfies FR5.2
+      (`{"free-viewing": (768,) float32}`), so the run copies it and needs no hub access from the
+      compute node.
+
+Remaining, all cluster-only:
+
+- [ ] Build the `isp` env; record deviations from the [TechStack.md](TechStack.md) §1 pin list, and
+      enforce `multimatch-gaze == 0.1.3` (FR1.3).
+- [ ] Verify the on-disk case of `FV-ex-012` and `fewshot_user_embedding_10.pt`; symlink the checkpoint
+      and the subject embedding (FR6).
+- [ ] Confirm the checkpoint's state dict carries no `subject_embed.weight` key (FR6.6).
+- [ ] Run Stage B, then the query-set evaluation at `--seed 0 1 2` (FR13.3).
+- [ ] Write `notes.md`: environment, staged data, preflight counters, the metric table vs the paper's
+      COCO-FreeView row, the denominators, and the verdict.
+
+**Done when:** SM / MM / SED land within the three-seed noise band of the published COCO-FreeView row,
+and the exact command + env are recorded in `notes.md`.
+
+<details>
+<summary><s>Superseded: the OSIE formulation of F1</s></summary>
+
+The OSIE baseline run is **dropped, not deferred** — the spec above replaces it outright, for the
+reasons in "Why COCO-FreeView and not OSIE". OSIE stimulus images are consequently no longer an
+external dependency for F1. **`ISP/OSIE/GazeformerISP/` remains F5's template branch** (see
+[TechStack.md](TechStack.md) §2): F1's *baseline* branch and F5's *template* branch are deliberately
+different things.
+
+- ~~Stage the OSIE stimuli (800×600 `.jpg`) into the path `--img_dir` points at.~~
+- ~~Place `weights/OSIE-*/OSIE/checkpoint_best.pth` at `.../OSIE-ex-10to15/checkpoints/`.~~
+- ~~`CUDA_VISIBLE_DEVICES=0 python src/test.py --fewshot_subject 10 11 12 13 14`~~
+- ~~Decide what to do about the `if i_batch > 100: break` cap in the OSIE `test.py`.~~ Moot: the
+  COCO_FV `test.py` has no such cap. The OSIE cap is still documented in TechStack §5 because F5's
+  branch mirrors OSIE and must remove or parameterise it.
+- ~~Confirm the shipped `result/git-osie-useremb-ex-10to15/log/prediction.json` matches F6's schema.~~
+  F6's fixture is now a COCO_FV artefact instead — with a **different** schema (FR12.2).
+
+</details>
 
 ---
 
@@ -188,6 +227,14 @@ artefacts alone, and is the natural test harness for F1/F5 (D5).
       durations in **seconds** ([TechStack.md](TechStack.md) §4).
 - [ ] Reproduce F1's numbers from F1's artefacts as the correctness test.
 - [ ] Report the NaN-dropped row count alongside every mean (D7).
+- [ ] **Handle the COCO_FV `prediction.json` schema.** F1's fixture is now a COCO_FV artefact, not an
+      OSIE one, and its schema differs from [TechStack.md](TechStack.md) §3.5 in four ways (F1 spec
+      FR12.2): `name` is the **bare filename** while the loader keys on `"{task}/{name}"`; a `task`
+      key is present; a `length` key is present; and `T` is `duration * 1000` as a **float**, not
+      `int(round(t * 1000, 3))`, with `X`/`Y` also left as floats. The re-scorer must key on
+      `(name, task, subject)`.
+- [ ] Use the COCO_FV `evaluation.py`, not the OSIE one, when re-scoring a COCO_FV run — the two have
+      drifted (TechStack §4.2) and the published COCO-FreeView numbers came from the COCO_FV file.
 
 ---
 
@@ -212,7 +259,10 @@ Recorded so they are not silently re-litigated (D8). Reopening any of these is a
 
 - ✗ **Training or fine-tuning** ISP or SE-Net on our dataset. Eval-only with released checkpoints.
 - ✗ The **RL / policy-gradient** path (`OSIE_rl`, `--start_rl_epoch`).
-- ✗ The **COCO-FreeView** and **COCO-Search18** branches, and anything task/search-conditioned.
+- ✗ The **COCO-Search18** branch, and anything task/search-conditioned.
+  *(Amended 2026-09-08 by [F1's spec](../2026-09-08-cocofv-baseline-on-cluster/requirements.md) FR16.1:
+  **COCO-FreeView** was struck from this bullet. It is free-viewing, not search-conditioned, and it is
+  now the F1 baseline branch.)*
 - ✗ **Modifying, re-implementing, or "improving"** any metric (D1).
 - ✗ New metrics not in the paper's suite.
 - ✗ Making the repo run on Windows GPUs.
@@ -322,7 +372,9 @@ defect in the bundle export.
 | item | source | needed for |
 |---|---|---|
 | ISP-SENet checkpoints | already in `weights/` (git-ignored) | F1, F5 |
-| OSIE stimulus images | NUS-VIP `predicting-human-gaze-beyond-pixels` repo | F1 |
+| COCO-FreeView stimuli (`<category>/*.jpg`) | already staged on the cluster (`$FV_IMAGE_ROOT`) | F1 |
+| COCO-FreeView fixation labels | already staged on the cluster (`$FV_FIX_JSON`) | F1 |
+| ~~OSIE stimulus images~~ | ~~NUS-VIP `predicting-human-gaze-beyond-pixels` repo~~ | ~~F1~~ — no longer needed; F1 is the COCO-FreeView baseline |
 | Detectron2 | source install, per HAT repo | F3 (option 1 only) |
 | MSDeformAttn | `SE-Net/src/pixel_decoder/ops/make.sh` | F3 (option 1 only) |
 | `stsb-roberta-base-v2` | sentence-transformers hub | F1, F4 |

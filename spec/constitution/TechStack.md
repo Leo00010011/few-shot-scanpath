@@ -65,6 +65,16 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
 - Its tests: `py -m pytest tests/eve_bridge -q`. The `[bundle]` group is skipped unless
   `--bundle-dir` is passed; `--bridge-subjects a,b` and `--bridge-support-pool-size N` override the
   configuration those checks run under.
+- The COCO-FreeView baseline run (F1), submitted from the repo root on the cluster:
+  `sbatch bash/test_cocofv.sh` (and `sbatch --export=ALL,SEED=1 bash/test_cocofv.sh` for the other
+  seeds). Every tunable in its top block is overridable from the environment.
+- Its CPU preflight tools, runnable from the repo root on Windows or a login node:
+  - `py tools/cocofv_prep/normalize_fixations.py --in PATH --out PATH`
+  - `py tools/cocofv_prep/check_fixations.py --fix PATH --images DIR --fewshot-subject 0 1 2 [--split test]`
+    — prints the counter dict as JSON on **stdout**, commentary on stderr, so it can be teed.
+  - `py tools/cocofv_prep/check_features.py --fix PATH --feat-dir DIR` — the only torch importer of
+    the three; its **exit code** drives the run script's skip-extraction guard.
+- Its tests: `py -m pytest tests/cocofv_prep -q`. No fixtures or cluster data needed.
 
 ---
 
@@ -108,7 +118,16 @@ few-shot-scanpath/
 │   ├── heatmap_metrics.py          #   score_step_heatmaps() — THE ONLY torch importer in the bridge
 │   └── build.py                    #   CLI
 │
+├── tools/cocofv_prep/              # ◀ OUR code. CPU preflight for F1. Added 2026-09-08
+│   ├── __init__.py                 #   CocoFvPreflightError
+│   ├── normalize_fixations.py      #   the 3 preprocess_fixations.py transforms, with --in/--out
+│   ├── check_fixations.py          #   FR3.5 invariants; the equal-subject one above all (stdlib only)
+│   └── check_features.py           #   FR4.6; THE ONLY torch importer here; exit code drives the guard
+│
+├── bash/test_cocofv.sh             # ◀ OUR code. The single sbatch script for F1
+│
 ├── tests/eve_bridge/               # pytest, CPU. `[bundle]`-marked tests need --bundle-dir
+├── tests/cocofv_prep/              # pytest, CPU. Self-contained fixtures, no cluster data
 │
 ├── weights/                        # released checkpoints (git-ignored: *.pt, *.pth)
 │   ├── OSIE-.../OSIE/{checkpoint_best.pth, ckp_11999.pt,
@@ -125,6 +144,14 @@ few-shot-scanpath/
 **We adapt the `ISP/OSIE/GazeformerISP` branch.** Rationale: our dataset is free-viewing; OSIE is the only
 free-viewing branch with a single fixed task (`"free-viewing"`), a flat image directory, a checked-in
 example `fixations.json`, a `data_postprocess.py`, and a shipped example `prediction.json` to diff against.
+
+> **F1's baseline branch and F5's template branch are deliberately different, and both stay.**
+> F1 reproduces a published number on **`ISP/COCO_FV/GazeformerISP/`** — it is free-viewing, its query
+> set is 3 unseen subjects (the order of magnitude OPEN-5 permits on EVE), its stimuli are photographic
+> scenes, and its `test.py` has no `i_batch > 100` cap. F5 builds `ISP/EVE/GazeformerISP/` by mirroring
+> **`ISP/OSIE/GazeformerISP/`**, because OSIE carries the `data_postprocess.py`, the checked-in
+> `fixations.json` and the shipped `prediction.json` that COCO_FV lacks. "Best branch to reproduce a
+> number on" and "best branch to copy a tree from" are not the same question. Do not collapse them.
 
 ---
 
@@ -301,6 +328,38 @@ numbers that are ours, not theirs.
   1.0, 0.0 at 2.0). CC correctly returns 0. The meaningful floor is a *random* prediction, where both
   sit at ≈ 0. An NSS near zero on a nearly-uniform action map is therefore not informative — do not
   read it as "chance level".
+
+### 4.2 Per-branch metric drift — `evaluation.py` is NOT one file replicated across branches
+
+The single most expensive wrong assumption available in this repository is that
+`src/utils/evaluation.py` is the same file in every branch. It is not.
+`ISP/COCO_FV/GazeformerISP/src/utils/evaluation.py` has drifted from the OSIE one in six ways. **All
+versions are frozen under D1 regardless** — each produced the published numbers for its own dataset, so
+reconciling them would make our numbers incomparable to the table we are trying to reproduce, which
+defeats the mission. Documented, never edited.
+
+Verified 2026-09-08: `evaltools/scanmatch.py` and `evaltools/visual_attention_metrics.py` are both
+**byte-identical** between the OSIE and COCO_FV branches. Only `evaluation.py` differs.
+
+| # | COCO_FV divergence from OSIE | consequence |
+|---|---|---|
+| 1 | No `if len(vector) >= 3` guard around MultiMatch / SED / STDE. Padding to length 3 still occurs, then all metrics run unconditionally. | Every cell is scored; the OSIE branch leaves some at `-1`. |
+| 2 | No NaN → 1 coercion when the two quantised ScanMatch sequences are identical. | A NaN ScanMatch score stays NaN instead of becoming 1. |
+| 3 | Diagonal arrays are filtered with `!= -1` (and `(...==-1).sum(-1)==0` for MultiMatch) before the mean; `SED`/`STDE` likewise. | Uninitialised cells are dropped rather than polluting the mean. The dropped count is **not printed** and must be derived from `score_details`. |
+| 4 | `p2g()` computes **`r3 = ... rank < 2`**, not `rank < 3`. | The field logged as `R@3` is in fact **Recall@2**, and must be labelled `R@2` in every write-up. The published COCO-FreeView column came from this same code. Not a defect to fix (D1). |
+| 5 | `p2g()` skips rows whose scores are all `-1`. | The retrieval denominator is the number of scored rows, not `len(gt) * subject_num`. |
+| 6 | `human_evaluation_by_subject()` uses `stimulus = zeros((320, 512, 3))` but `screensize=[320, 240]` — internally inconsistent. | Irrelevant: the function is commented out in `test.py`. Do not call it. |
+
+Two more COCO_FV-specific contracts, for the same reason:
+
+- **The metric screen is 512×320, not 512×384.** `args.width=512`, `args.height=320`, and
+  `COCOSearch_evaluation`'s `origin_size` default is `(320, 512)` — which `test.py` does not override,
+  so `resizescale_x == resizescale_y == 1.0` and **no rescaling occurs**. That is correct: the labels
+  are natively 512×320. ScanMatch is therefore `Xres=512, Yres=320, Xbin=16, Ybin=12` → 32 × 26.67 px
+  bins. Contrast D3's EVE case, where rescaling is mandatory.
+- **`args.max_length = 20`** for COCO_FV (OSIE uses 16), and ground-truth scanpaths are **not**
+  truncated — `__getitem__` iterates `range(fixation["length"])` in full. Only generated scanpaths are
+  capped. The asymmetry is expected and is not a bug.
 
 ---
 
