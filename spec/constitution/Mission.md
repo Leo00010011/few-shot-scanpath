@@ -1,7 +1,7 @@
 # Mission
 
 > Constitution file 1 of 3. Read together with [TechStack.md](TechStack.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-07
+> Last updated: 2026-09-08
 
 ---
 
@@ -30,11 +30,11 @@ which would defeat the purpose.
 
 Concretely, three problems, in order of difficulty:
 
-**P1 — Data impedance mismatch.**
+**P1 — Data impedance mismatch.** *(solved 2026-09-08 — `tools/eve_bridge/`, Roadmap F2)*
 Our dataset lives in a separate repository behind its own dataloader. This repo consumes a rigid, flat
-JSON schema (`fixations.json`) plus precomputed per-image ResNet feature tensors. Nothing bridges the two.
-Coordinate space, duration units, subject indexing, and stimulus resolution all differ and all silently
-corrupt metrics if mismatched.
+JSON schema (`fixations.json`) plus precomputed per-image ResNet feature tensors. Coordinate space,
+duration units, subject indexing, and stimulus resolution all differ and all silently corrupt metrics
+if mismatched. The bridge now converts, declares and asserts every one of them.
 
 **P2 — Subject alignment.**
 The model is *personalized*: prediction `i` is meaningful only when scored against ground truth from the
@@ -48,6 +48,13 @@ milliseconds inside ScanMatch; a fixed 16×12 spatial binning tied to a specific
 short scanpaths padded to length 3 before MultiMatch; NaN elimination that silently changes the
 denominator. These must be preserved, not "cleaned up".
 
+**P4 — Cohort structure.** *(discovered 2026-09-08, unsolved — Roadmap OPEN-5)*
+The evaluator's square score matrix presupposes that every stimulus was seen by *every* subject in the
+cohort. OSIE satisfies this by construction; EVE does not — participants see near-disjoint image sets,
+so the largest usable cohort in the bundle we hold is **2 subjects over 13 stimuli**. This is not a
+units or indexing problem that a converter can absorb. It bounds what the experiment can be, and it
+has to be decided before any GPU time is spent on our data.
+
 ---
 
 ## 3. Overall pipeline
@@ -57,16 +64,19 @@ The end-to-end path for **eval-only inference with released checkpoints** (the m
 
 ```
                         ┌──────────────────────────────────────────┐
-   OUR DATA             │ external repo: our dataset + its         │
-   (foreign)            │ dataloader (raw gaze → fixations)        │
+   OUR DATA             │ EVE bundle.h5, read through the          │
+   (foreign)            │ installed `evedataset` package           │
                         └───────────────────┬──────────────────────┘
-                                            │  [STAGE A — bridge, TBD]
+                                            │  [STAGE A — tools/eve_bridge/ ✓ built]
                                             ▼
                         ┌──────────────────────────────────────────┐
    CANONICAL            │ fixations.json                           │
    FORM                 │ [{name, subject, X, Y, T, length,        │
                         │   split, condition, task}, ...]          │
                         │ + stimulus images (.jpg)                 │
+                        │ + subject_id_map.json  (D4)              │
+                        │ + gt_heatmaps.h5       (per-step GT)     │
+                        │ + bridge_report.json   (D7 counters)     │
                         └───────────┬──────────────────┬───────────┘
                                     │                  │
                  [STAGE B]          │                  │  [STAGE C]
@@ -97,10 +107,23 @@ The end-to-end path for **eval-only inference with released checkpoints** (the m
                         result/<run>/log/{log_test_*.txt, prediction.json}
 ```
 
-Stage A is the only stage we author from scratch. Stages B–E already exist and are to be *configured*,
-not rewritten. Stage C, in eval-only mode, may reduce to loading a released `*_user_embedding.pt` — but
-that embedding was learned for the *original* subjects, not ours, which is the central open scientific
-question recorded in [Roadmap.md](Roadmap.md).
+Stage A is the only stage we author from scratch, and as of 2026-09-08 it exists: `tools/eve_bridge/`
+(Roadmap F2). It also produces one thing the diagram above does not show as a stage — the
+**ground-truth per-timestep 24×32 heatmaps** that mirror the model's `all_actions_prob`. EVE ships no
+saliency maps, so that ground truth is derived from the scanpath itself, by the same construction
+`OSIE.__getitem__` already uses for training. It is what makes an NSS/CC/KLD block possible alongside
+the scanpath metrics; see the denominator warning in [TechStack.md](TechStack.md) §4.1.
+
+Stages B–E already exist and are to be *configured*, not rewritten. Stage C, in eval-only mode, may
+reduce to loading a released `*_user_embedding.pt` — but that embedding was learned for the *original*
+subjects, not ours, which is the central open scientific question recorded in
+[Roadmap.md](Roadmap.md).
+
+**The bridge running is not the same as the data being usable.** Stage A currently has no
+scientifically valid configuration on the bundle we hold: the EVE `test*` participants carry no valid
+trials, and participants see near-disjoint stimulus sets, which the ISP loader's equal-subject
+requirement will not tolerate above 2 subjects. That is Roadmap **OPEN-5**, and it blocks Stages C, B
+and D for our data until it is decided.
 
 ---
 
@@ -132,6 +155,10 @@ module and lets us diff our JSON against the shipped OSIE `fixations.json` as a 
   `ISP/OSIE/GazeformerISP/src/test.py` does *not* pass it today and relies on the `OSIE_evaluation`
   default `(600, 800)`; `args.origin_width` / `args.origin_height` are parsed but unused on that path.
   A dataset with any other stimulus size that does not fix this will be silently mis-scaled.
+- For EVE, `origin_size = (1080, 1920)`. The bridge writes it into `bridge_report.json` and into the
+  heatmap-store attrs so it cannot be missed. The resulting scale is **non-uniform** (3.75 × 2.8125) —
+  a deliberate squash of 16:9 into the 512×384 metric screen, taken so every metric parameter stays
+  bit-identical to the published configuration (Roadmap OPEN-4). F7 must state the distortion.
 
 ### D4 — Subject identity is preserved end-to-end
 Row index = predicted subject, column index = ground-truth subject, and the **diagonal is the reported
@@ -150,6 +177,12 @@ without a GPU.
 dimensions (vector, direction, length, position, duration); `SED`; `STDE`; plus the ScanMatch-with-duration
 retrieval block (MRR, R@1, R@3, R@5). Means **and** standard deviations, since the evaluator already
 returns both.
+
+The NSS / CC / KLD heatmap block added in F2 is **supplementary and reported separately**. It is not a
+new metric — the functions are the authors' own, imported unmodified from `models/loss.py` — but it is
+not in the paper's table either, so it never enters the paper-comparable block and never influences
+`SM` / `MM`. It also averages over a different denominator (valid timesteps, not (image, subject)
+cells), which must be stated wherever it appears. See [TechStack.md](TechStack.md) §4.1.
 
 ### D7 — Fail loudly on shape or coverage mismatch
 Silent degradation is the enemy: a missing `.pth` feature file, a subject with zero scanpaths on a split,

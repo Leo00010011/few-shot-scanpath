@@ -1,7 +1,7 @@
 # Tech Stack
 
 > Constitution file 2 of 3. Read together with [Mission.md](Mission.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-07
+> Last updated: 2026-09-08
 
 ---
 
@@ -13,6 +13,14 @@
 | **Dev machine** | Windows 11 (this checkout) — **editing and artefact inspection only** |
 | **Never run on Windows** | anything importing `torch.cuda`, MSDeformAttn, or Detectron2 |
 | **Runnable on Windows/CPU** | the data bridge (Stage A), JSON schema validation, and offline re-scoring of `prediction.json` (pure numpy/scipy) |
+
+> **Dev-machine reality check (2026-09-08).** The Windows checkout has **Python 3.12 only** — `py -3.8`
+> does not resolve, so CPU-side work runs on `py` (3.12) with numpy 2.1.2, scipy 1.14.1, h5py 3.12.1,
+> torch 2.7.0+cpu, pandas 2.2.3. That is *not* the pin list below. It is fine for the bridge, whose
+> arithmetic is version-agnostic, but anything whose output the cluster later trusts bit-for-bit — in
+> particular the ground-truth heatmap cache — must be re-validated under the `isp` env's numpy 1.23.5
+> before F5 relies on it, since float32 promotion and structured-array behaviour is exactly what the
+> pin exists for.
 
 The repo requires **two separate conda environments** — they are not compatible and must not be merged:
 
@@ -49,7 +57,14 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
 - On the cluster: `CUDA_VISIBLE_DEVICES=0 python src/...`, always invoked **from the
   `ISP/<DATASET>/GazeformerISP/` directory** — every default path in `opts.py` / `test.py` is relative to
   it (`src/data/...`, `src/assets/...`, `../../../SE-Net/...`).
-- On Windows, for the CPU-only bridge/validation work: `py -3.8 ...` (the `py` launcher), never `python`.
+- On Windows, for the CPU-only bridge/validation work: `py ...` (the `py` launcher), never `python`.
+  Earlier revisions said `py -3.8`; 3.8 is not installed on this machine — see the dev-machine note in §1.
+- The bridge CLI, from the repo root:
+  `py tools/eve_bridge/build.py --bundle-dir DIR --out-dir DIR [--unseen-subjects ...]
+  [--support-pool-size 20] [--seed 0] [--skip-stimuli] [--skip-heatmaps]`
+- Its tests: `py -m pytest tests/eve_bridge -q`. The `[bundle]` group is skipped unless
+  `--bundle-dir` is passed; `--bridge-subjects a,b` and `--bridge-support-pool-size N` override the
+  configuration those checks run under.
 
 ---
 
@@ -85,6 +100,16 @@ few-shot-scanpath/
 │   ├── COCO_FV/GazeformerISP/      # free-viewing on COCO images (category subfolders)
 │   └── COCO_Search18/GazeformerISP/# target-present visual search (per-trial task labels)
 │
+├── tools/eve_bridge/               # ◀ Stage A — OUR code. CPU/Windows. Added 2026-09-08 (F2)
+│   ├── heatmaps.py                 #   build_step_heatmaps / to_target_scanpath (numpy+scipy)
+│   ├── convert.py                  #   build_fixations / export_stimuli (numpy+PIL, imports evedataset)
+│   ├── store.py                    #   GtHeatmapStore — the gt_heatmaps.h5 cache (numpy+h5py)
+│   ├── validate.py                 #   validate() / BridgeValidationError
+│   ├── heatmap_metrics.py          #   score_step_heatmaps() — THE ONLY torch importer in the bridge
+│   └── build.py                    #   CLI
+│
+├── tests/eve_bridge/               # pytest, CPU. `[bundle]`-marked tests need --bundle-dir
+│
 ├── weights/                        # released checkpoints (git-ignored: *.pt, *.pth)
 │   ├── OSIE-.../OSIE/{checkpoint_best.pth, ckp_11999.pt,
 │   │                  train_user_embedding.pt, fewshot_user_embedding_10.pt}
@@ -93,7 +118,8 @@ few-shot-scanpath/
 │
 └── spec/                           # ◀ our spec-driven-development workspace
     ├── constitution/{Mission,TechStack,Roadmap}.md
-    └── YYYY-MM-DD-<slug>/{requirements,plan,validation}.md
+    └── YYYY-MM-DD-<slug>/{requirements,plan,validation}.md  (+ notes.md when a spec
+                                                              lands findings worth keeping)
 ```
 
 **We adapt the `ISP/OSIE/GazeformerISP` branch.** Rationale: our dataset is free-viewing; OSIE is the only
@@ -163,6 +189,59 @@ Written by `get_prediction_list()` to `result/<evaluation_dir basename>/log/pred
 (`int(round(t * 1000, 3))`). Same schema as `fixations.json` minus `length`/`split`/`condition`/`task`,
 which makes it re-scorable offline.
 
+### 3.6 EVE bridge artefacts (Stage A output, added 2026-09-08)
+
+`tools/eve_bridge/build.py` writes five things into `--out-dir`. Downstream features consume these
+artefacts, never the bridge's code — the one exception is `score_step_heatmaps()`, which F5 imports.
+
+| artefact | consumer | contract |
+|---|---|---|
+| `fixations.json` | F4, F5 | §3.1 exactly. EVE specifics: `X`/`Y` in native **1920×1080**, 1-indexed (the bridge adds `+1` once, to `bundle.get_scanpath()`'s 0-indexed pixels); `T` = `round(duration_ms)`, floored at 1; `split ∈ {train, test}` only — never `validation`; `condition="freeview"`, `task="none"`. Records sorted by `(name, subject)`, and **that order is the index space everything else keys against**. |
+| `subject_id_map.json` | F5 | `{"to_dense": {"train02": 0, …}, "to_eve": {"0": "train02", …}}`. Dense ids are the index into the *sorted* participant list, so argument order cannot change them. This is the sole authority for D4's "which of my real subjects is row 3?". |
+| `stimuli/<name>.jpg` | F4 | Native 1920×1080, `quality=95, subsampling=0`. One per `stimulus_name`; on a rendering collision the first exp_key in sorted order wins and the conflict is *counted*, not resolved (Roadmap OPEN-6). |
+| `gt_heatmaps.h5` | F5 | Layout below. |
+| `bridge_report.json` | F7 | Resolved args, `origin_size`, `support_pool_size`, subject/stimulus/trial counts, `fixations_sha256`, and every drop counter — always present, `0` when nothing fired (D7). |
+
+**`origin_size` is `(1080, 1920)` as `(H, W)`** and is written into both `bridge_report.json` and the
+HDF5 root attrs, precisely so F5 passes it explicitly rather than inheriting the `OSIE_evaluation`
+default `(600, 800)`. The resulting `resizescale_x = 3.75`, `resizescale_y = 2.8125` are non-uniform —
+the deliberate **squash** (Roadmap OPEN-4).
+
+#### `gt_heatmaps.h5`
+
+EVE ships no saliency maps, so the ground-truth counterpart of the model's `all_actions_prob` is the
+per-timestep blurred fixation map that `OSIE.__getitem__` already builds — one-hot placement at
+`((pos-1)/downscale).astype(int32)` (truncating, not rounding), then `gaussian_filter(σ=1)`, then
+divide by the sum. `tools/eve_bridge/heatmaps.py` re-derives that rather than importing `dataset.py`
+(which would drag in torch/torchvision/skimage/matplotlib), and a parity test pins the two **bitwise**
+over 200 seeded cases so the copy cannot drift.
+
+```
+/                       attrs: created_utc (ISO-8601 Z), bundle_dir,
+                               origin_size (2,) int32 = [1080, 1920],
+                               action_map  (2,) int32 = [24, 32],
+                               max_length  int32 = 16, blur_sigma float32 = 1.0,
+                               fixations_sha256, n_trials int32,
+                               subject_ids_dense (N_subj,) int32,
+                               subject_ids_eve   (N_subj,) vlen utf-8
+/trials/trial_key       (N,)             vlen utf-8   "{name}|{dense subject}"
+/trials/exp_key         (N,)             vlen utf-8   originating EVE exp_key (D4 provenance)
+/trials/subject         (N,)             int32        dense subject id
+/trials/length          (N,)             int32        min(len(X), max_length)
+/trials/action_mask     (N, 16)          float32
+/trials/heatmaps        (N, 16, 24, 32)  float32, gzip=4, chunks=(1, 16, 24, 32)
+```
+
+Two invariants worth knowing before touching it:
+
+- **Row `i` is record `i` of `fixations.json`.** The store addresses rows *positionally*, so
+  `fixations_sha256` is the whole safety net: `GtHeatmapStore.load(path, fixations_path=…)` raises on
+  mismatch. A merely *reordered* JSON changes the hash and is correctly rejected — an order-insensitive
+  check would let a mis-indexed cache through.
+- **`trial_key` carries the dense subject, `exp_key` rides alongside.** `exp_key_of()` and
+  `trial_key_of()` are inverses with no fallback that invents a key, which is what makes any row
+  traceable back to the real EVE recording.
+
 ---
 
 ## 4. Metric contracts (FROZEN — see D1)
@@ -198,6 +277,31 @@ Non-obvious behaviour that must be preserved:
 **Headline numbers** (as printed by `test.py`):
 `SM = scipy.stats.hmean([scanmatch_wo_dur, scanmatch_w_dur])`, `MM = mean(5 MultiMatch dims)`, `SED`.
 
+### 4.1 Heatmap metrics — NSS / CC / KLD (borrowed, not frozen)
+
+`models/loss.py` is **not** on the D1 frozen list, but it already contains these three functions with
+the authors' epsilon handling and normalisation, and the COCO branches' `test.py` imports them for the
+same purpose. `tools/eve_bridge/heatmap_metrics.py` therefore loads that file **by path via
+`importlib`** and calls into it — never copies, never reimplements. Reimplementing would produce
+numbers that are ours, not theirs.
+
+- Argument order is **prediction first, ground truth second** in all three: `NSS(input, fixation)`,
+  `CC(input, salmap)`, `KLD(input, salmap)`. KLD is not symmetric, so getting this backwards yields a
+  plausible but wrong number; a test pins it with an asymmetry check.
+- The wrapper adds exactly one thing: masking of padding steps. Only `(b, t)` with
+  `t < min(length[b], 16)` is scored, because padding steps carry an all-zero ground-truth map on
+  which CC and NSS are undefined and would silently deflate every number.
+- **Denominator asymmetry — must be stated wherever these are reported.** The three functions reduce
+  with `.mean()` over dim 0, so the returned value is a mean over valid **timesteps**
+  (`M = Σ_b min(length[b], 16)`). The scanpath metrics average over **(image, subject) cells**. They
+  are not two views of the same mean.
+- **NSS is ill-conditioned on a near-flat prediction.** It standardises by `(x - mean) / (std + 1e-7)`;
+  on a constant float32 map the numerator is pure rounding residual (~1e-8) against a bare-epsilon
+  denominator, so the result is O(1) noise whose value depends on the constant (−1.79 at 0.37, −0.60 at
+  1.0, 0.0 at 2.0). CC correctly returns 0. The meaningful floor is a *random* prediction, where both
+  sit at ≈ 0. An NSS near zero on a nearly-uniform action map is therefore not informative — do not
+  read it as "chance level".
+
 ---
 
 ## 5. Model and inference contract
@@ -224,9 +328,19 @@ Non-obvious behaviour that must be preserved:
 3. **New dataset branch layout.** If we create `ISP/<OurDataset>/GazeformerISP/`, mirror the OSIE tree
    exactly — same filenames, same relative paths — so upstream diffs stay readable.
 4. **Paths.** Never hardcode an absolute path. Cluster paths go in the run script / CLI args, not in `.py`.
-5. **Git hygiene.** `.gitignore` already excludes `*.pt` and `*.pth`. Never commit weights, features,
-   stimulus images, or subject-level gaze data. Add `spec/` artefacts, converters, and run scripts.
-6. **`__pycache__` directories are checked in upstream.** Ignore them; do not "clean up".
+5. **Git hygiene.** `.gitignore` excludes `*.pt`, `*.pth`, `*.h5` and `__pycache__/`. Never commit
+   weights, features, stimulus images, or subject-level gaze data — and note that a bridge `--out-dir`
+   contains all three, so it belongs outside the repo or under an ignored path. Add `spec/` artefacts,
+   converters, and run scripts.
+6. **`__pycache__` directories are checked in upstream.** Ignore them; do not "clean up" — the 89
+   tracked ones stay tracked (`.gitignore` does not untrack). Do delete any *new* `.pyc` your own runs
+   drop into upstream directories: loading `loss.py` or `dataset.py` via `importlib` writes them.
 7. **No new heavy dependencies.** The env pins are fragile (python 3.8, torch 1.11). Anything new must be
    pure-python and justified.
 8. **Every run is logged.** Use `utils/logger.Logger`; it already dumps the full arg namespace (D5).
+9. **The bridge never imports frozen code.** `tools/eve_bridge/` must not import anything under
+   `ISP/*/GazeformerISP/src/utils/`. Its only ISP dependency is `models/loss.py`, loaded by path.
+   Keep torch confined to `heatmap_metrics.py` so the rest stays runnable on the Windows dev machine.
+10. **Bridge artefacts are addressed positionally.** `fixations.json` record order *is* the key space
+    for `gt_heatmaps.h5`. If you regenerate one, regenerate the other; the `fixations_sha256` check
+    exists to make the mistake loud rather than silent.
