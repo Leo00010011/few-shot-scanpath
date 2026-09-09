@@ -4,3 +4,9 @@
 __pycache__/
 *.npy
 *.json
+# Subject-level gaze data and staged dataset artefacts (TechStack 6.5).
+# data/ holds osie_fixations_update_duration.json, the COCO fixation labels and
+# the per-dataset embeddings.npy -- none of it belongs in the repo.
+data/
+work/
+logs/

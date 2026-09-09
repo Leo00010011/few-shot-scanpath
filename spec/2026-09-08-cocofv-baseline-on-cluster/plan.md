@@ -1,4 +1,27 @@
-# Implementation Plan — COCO-FreeView baseline on the cluster
+# Implementation Plan — COCO-FreeView baseline on the cluster  *(superseded)*
+
+> # ⚠ SUPERSEDED — 2026-09-09
+>
+> **This spec was never executed and F1 is not this.** F1 is back on OSIE:
+> [`spec/2026-09-08-osie-eval-baseline/`](../2026-09-08-osie-eval-baseline/).
+>
+> **Why it was withdrawn.** The COCO-FreeView **test split is a held-out challenge
+> benchmark** — the public `COCOFreeView_fixations_trainval.json` carries `train`/`valid`
+> only, with no public test labels. A baseline computed on it is either not the published
+> number or not reproducible by anyone outside the challenge, and F1's entire purpose is a
+> **reproducible** environment proof. That reason is recorded in Roadmap §4 as a permanent
+> out-of-scope entry rather than a preference, so it is not re-litigated later (D8).
+>
+> **Retained deliberately, not archived by accident.** §FR10 documents six real divergences
+> between `ISP/COCO_FV/.../evaluation.py` and the OSIE one — most consequentially **FR10.4**,
+> where `p2g()` computes `rank < 2` while logging the field as `R@3`, so the published
+> COCO-FreeView `R@3` column is in fact **Recall@2**. Those are true facts about this
+> codebase (mirrored in [TechStack.md](../constitution/TechStack.md) §4.2) and F6/F7 may need
+> them. Nothing here is to be *implemented*; it is reference.
+>
+> **What moved.** `tools/cocofv_prep/` → `tools/osie_prep/` and `bash/test_cocofv.sh` →
+> `bash/test_osie.sh`, both retargeted (Roadmap F1). Paths named below no longer exist.
+
 
 > Companion to [requirements.md](requirements.md) and [validation.md](validation.md).
 

@@ -1,6 +1,6 @@
-"""Pytest wiring for the COCO-FreeView preflight tests.
+"""Pytest wiring for the OSIE preflight tests.
 
-Record builders live in :mod:`cocofv_fixtures`, not here -- see that module's
+Record builders live in :mod:`osie_fixtures`, not here -- see that module's
 docstring for why the name matters.
 """
 

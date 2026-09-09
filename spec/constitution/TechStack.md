@@ -1,7 +1,7 @@
 # Tech Stack
 
 > Constitution file 2 of 3. Read together with [Mission.md](Mission.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-08
+> Last updated: 2026-09-09
 
 ---
 
@@ -65,16 +65,21 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
 - Its tests: `py -m pytest tests/eve_bridge -q`. The `[bundle]` group is skipped unless
   `--bundle-dir` is passed; `--bridge-subjects a,b` and `--bridge-support-pool-size N` override the
   configuration those checks run under.
-- The COCO-FreeView baseline run (F1), submitted from the repo root on the cluster:
-  `sbatch bash/test_cocofv.sh` (and `sbatch --export=ALL,SEED=1 bash/test_cocofv.sh` for the other
+- The OSIE baseline run (F1), submitted from the repo root on the cluster:
+  `sbatch bash/test_osie.sh` (and `sbatch --export=ALL,SEED=1 bash/test_osie.sh` for the other
   seeds). Every tunable in its top block is overridable from the environment.
+  *(Retargeted 2026-09-09 from `bash/test_cocofv.sh`; note the `py -m pip` → `python -m pip` fix —
+  the `py` launcher is Windows-only and does not exist on the cluster.)*
 - Its CPU preflight tools, runnable from the repo root on Windows or a login node:
-  - `py tools/cocofv_prep/normalize_fixations.py --in PATH --out PATH`
-  - `py tools/cocofv_prep/check_fixations.py --fix PATH --images DIR --fewshot-subject 0 1 2 [--split test]`
+  - `py tools/osie_prep/check_fixations.py --fix PATH --images DIR --fewshot-subject 10 11 12 13 14
+    [--split test] [--origin-width 800] [--origin-height 600]`
     — prints the counter dict as JSON on **stdout**, commentary on stderr, so it can be teed.
-  - `py tools/cocofv_prep/check_features.py --fix PATH --feat-dir DIR` — the only torch importer of
-    the three; its **exit code** drives the run script's skip-extraction guard.
-- Its tests: `py -m pytest tests/cocofv_prep -q`. No fixtures or cluster data needed.
+  - `py tools/osie_prep/check_features.py --fix PATH --feat-dir DIR` — the only torch importer of
+    the two; its **exit code** drives the run script's skip-extraction guard.
+  - There is no `normalize_fixations.py`: the OSIE branch's shipped
+    `ISP/OSIE/GazeformerISP/src/data/fixations.json` is already canonical (§3.1), so there is no
+    transform to apply. See §3.7 for the *other* OSIE label file and why it must not be used.
+- Its tests: `py -m pytest tests/osie_prep -q` (34 tests). No fixtures or cluster data needed.
 
 ---
 
@@ -118,16 +123,16 @@ few-shot-scanpath/
 │   ├── heatmap_metrics.py          #   score_step_heatmaps() — THE ONLY torch importer in the bridge
 │   └── build.py                    #   CLI
 │
-├── tools/cocofv_prep/              # ◀ OUR code. CPU preflight for F1. Added 2026-09-08
-│   ├── __init__.py                 #   CocoFvPreflightError
-│   ├── normalize_fixations.py      #   the 3 preprocess_fixations.py transforms, with --in/--out
-│   ├── check_fixations.py          #   FR3.5 invariants; the equal-subject one above all (stdlib only)
+├── tools/osie_prep/                # ◀ OUR code. CPU preflight for F1. Retargeted 2026-09-09
+│   ├── __init__.py                 #   OsiePreflightError
+│   ├── check_fixations.py          #   FR3.5 invariants; equal-subject (c) and duration-bin (g)
+│   │                               #   above all (stdlib only)
 │   └── check_features.py           #   FR4.6; THE ONLY torch importer here; exit code drives the guard
 │
-├── bash/test_cocofv.sh             # ◀ OUR code. The single sbatch script for F1
+├── bash/test_osie.sh               # ◀ OUR code. The single sbatch script for F1
 │
 ├── tests/eve_bridge/               # pytest, CPU. `[bundle]`-marked tests need --bundle-dir
-├── tests/cocofv_prep/              # pytest, CPU. Self-contained fixtures, no cluster data
+├── tests/osie_prep/                # pytest, CPU. Self-contained fixtures, no cluster data
 │
 ├── weights/                        # released checkpoints (git-ignored: *.pt, *.pth)
 │   ├── OSIE-.../OSIE/{checkpoint_best.pth, ckp_11999.pt,
@@ -145,13 +150,15 @@ few-shot-scanpath/
 free-viewing branch with a single fixed task (`"free-viewing"`), a flat image directory, a checked-in
 example `fixations.json`, a `data_postprocess.py`, and a shipped example `prediction.json` to diff against.
 
-> **F1's baseline branch and F5's template branch are deliberately different, and both stay.**
-> F1 reproduces a published number on **`ISP/COCO_FV/GazeformerISP/`** — it is free-viewing, its query
-> set is 3 unseen subjects (the order of magnitude OPEN-5 permits on EVE), its stimuli are photographic
-> scenes, and its `test.py` has no `i_batch > 100` cap. F5 builds `ISP/EVE/GazeformerISP/` by mirroring
-> **`ISP/OSIE/GazeformerISP/`**, because OSIE carries the `data_postprocess.py`, the checked-in
-> `fixations.json` and the shipped `prediction.json` that COCO_FV lacks. "Best branch to reproduce a
-> number on" and "best branch to copy a tree from" are not the same question. Do not collapse them.
+> **F1's baseline branch and F5's template branch are the same branch again, as of 2026-09-09.**
+> Both are `ISP/OSIE/GazeformerISP/`. F1 was briefly re-pointed at `ISP/COCO_FV/GazeformerISP/` on the
+> argument that its 3-subject query set matched what OPEN-5 permits on EVE; that is withdrawn, because
+> the COCO-FreeView **test split is a held-out challenge benchmark** and a baseline nobody outside the
+> challenge can reproduce cannot serve as F1's environment proof (Roadmap §4). The collapse is a real
+> benefit: F1 and F5 now exercise the same loader, the same `data_postprocess.py`, and the same
+> `evaluation.py`, so an F5 discrepancy cannot be blamed on branch drift. The COCO_FV branch stays on
+> disk and its `evaluation.py` divergences stay documented in §4.2 — they are still true, and F6/F7
+> may need them.
 
 ---
 
@@ -271,6 +278,37 @@ Two invariants worth knowing before touching it:
 
 ---
 
+### 3.7 The two OSIE label files — one is NOT a fixations.json
+
+There are two OSIE label files in this checkout. They have the **same 10,500 records, the same
+`(name, subject, split)` key set, the same nine keys, and byte-identical `X`/`Y`**. Only `T` differs,
+and only one of them is a `fixations.json` in the §3.1 sense:
+
+| file | `T` | use |
+|---|---|---|
+| `ISP/OSIE/GazeformerISP/src/data/fixations.json` (6.06 MB) | duration in **ms**, 20 – 1975 (test split: 20 – 1033) | ✅ **canonical.** `--fix_dir`'s default; what F1 evaluates |
+| `data/osie_fixations_update_duration.json` (7.75 MB) | **decile bin index, 0 – 9** | ✗ a duration-head training target. Never `--fix_dir` |
+
+Verified 2026-09-09 by joining the two on `(name, subject)`: the bins are ten equal-count buckets of
+the true duration — bin 0 = 20–96 ms, bin 1 = 97–125, … bin 9 = 358–1975, ~9,800 fixations each.
+
+**Why this is dangerous rather than merely wrong.** Feeding the binned file to `test.py` raises nothing.
+Every §3.1 invariant holds — schema, lengths, equal subjects, coordinate ranges, splits. The damage is
+entirely downstream and entirely silent: `evaluation.py` multiplies `duration` by 1000 for ScanMatch,
+whose `TempBin=50` then quantises a *bin index* as though it were milliseconds, and MultiMatch's
+duration dimension compares bins to bins. `SM` (the harmonic mean of the two ScanMatch variants) and
+`MM` (the mean of five dimensions, one of them duration) would both be wrong, plausible, and
+uncomparable to the published table — the precise failure D7 exists to prevent.
+
+`tools/osie_prep/check_fixations.py` invariant **(g)** is the guard: it raises when `max(T)` over the
+evaluated split is ≤ 20, which no real fixation-duration distribution can be. `bash/test_osie.sh`
+defaults `FIX_JSON` to the canonical file, and `data/` is git-ignored (working convention 5).
+
+The name is the trap: `osie_fixations_update_duration.json` reads like the file where durations were
+*fixed up*. It is the file where they were *replaced*.
+
+---
+
 ## 4. Metric contracts (FROZEN — see D1)
 
 Entry point: `comprehensive_evaluation_by_subject(gt_fix_vectors, predict_fix_vectors, args)` in
@@ -373,8 +411,16 @@ Two more COCO_FV-specific contracts, for the same reason:
   (`log_normal_mu`, `log_normal_sigma2`); `models/sampling.py::Sampling` turns these into fixation vectors
   via `random_sample()` → `generate_scanpath()`. Inference is therefore **stochastic** — `--eval_repeat_num`
   controls how many samples per trial.
-- `test.py` currently hard-stops at `if i_batch > 100: break`. This caps evaluation at 101 images and
+- `test.py` hard-stops at `if i_batch > 100: break`. It caps evaluation at 101 **batches** and
   **must be handled explicitly** in any spec that reports full-dataset numbers.
+  **It is inert for OSIE's own test split** (settled 2026-09-09): `OSIE_evaluation.__len__` returns
+  `len(self.imgid)` — the number of **images**, not records — and one batch item yields *all* subjects
+  for its image. The test split is 70 images × 15 subjects = 1050 records, so the loader yields 70
+  batches at `--batch 1` and 18 at the default `--batch 4`; the cap never fires. The shipped
+  `result/git-osie-useremb-ex-10to15/log/prediction.json` holds 350 records = 70 × 5, independently
+  confirming the published number covers the full split. F1 therefore leaves `test.py` unmodified.
+  **The cap becomes live in F5**, whose stimulus count is not bounded the same way — remove or
+  parameterise it there, and never assume "101 images": the unit is batches, hence images.
 
 ---
 
