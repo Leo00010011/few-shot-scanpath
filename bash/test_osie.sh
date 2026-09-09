@@ -28,9 +28,12 @@ echo "Running on node: ${SLURM_NODELIST:-<not under slurm>}"
 # ---- tunables (FR8.4) ------------------------------------------------------
 HOME_DIR="${HOME_DIR:-/mnt/beegfs/home/leonardo.ulloa}"
 PROJECT_DIR="${PROJECT_DIR:-$HOME_DIR/projects/few-shot-scanpath}"
-# A FLAT directory of the 700 OSIE 800x600 .jpg stimuli (NUS-VIP
-# predicting-human-gaze-beyond-pixels). Stage B only -- see the note below.
-OSIE_IMAGE_ROOT="${OSIE_IMAGE_ROOT:-$HOME_DIR/data/OSIE/stimuli}"
+# A FLAT directory of the 700 OSIE 800x600 .jpg stimuli, 1001.jpg .. 1700.jpg
+# (NUS-VIP predicting-human-gaze-beyond-pixels). Stage B only -- see the note below.
+# Staged 2026-09-09 at $PROJECT_DIR/data/stimuli. That is inside the checkout, which
+# is safe only because data/ is git-ignored (working convention 5, TechStack 6.5) --
+# never `git add -f` anything under it.
+OSIE_IMAGE_ROOT="${OSIE_IMAGE_ROOT:-$PROJECT_DIR/data/stimuli}"
 OSIE_WORK="${OSIE_WORK:-$PROJECT_DIR/work/osie}"   # BeeGFS -- features stream from here
 OSIE_DATA="${OSIE_DATA:-$OSIE_WORK/data}"
 WEIGHTS_DIR="${WEIGHTS_DIR:-$PROJECT_DIR/weights/OSIE-20260904T121550Z-1-001/OSIE}"
