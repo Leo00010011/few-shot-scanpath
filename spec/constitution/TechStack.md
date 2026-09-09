@@ -158,9 +158,34 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
 - Its tests: `py -m pytest tests/eve_bridge -q`. The `[bundle]` group is skipped unless
   `--bundle-dir` is passed; `--bridge-subjects a,b` and `--bridge-support-pool-size N` override the
   configuration those checks run under.
-- The OSIE baseline run (F1), submitted from the repo root on the cluster:
-  `sbatch bash/test_osie.sh` (and `sbatch --export=ALL,SEED=1 bash/test_osie.sh` for the other
-  seeds). Every tunable in its top block is overridable from the environment.
+- The OSIE baseline run (F1), from the repo root on the cluster. **The primary path is interactive,
+  under `salloc`** — chosen for debuggability, and the way the F1 sweep is actually run:
+  ```
+  salloc --gres=gpu:1 --cpus-per-task=4 --mem=16G --time=08:00:00
+  bash bash/test_osie.sh            # SEED=0
+  SEED=1 bash bash/test_osie.sh
+  SEED=2 bash bash/test_osie.sh
+  ```
+  **`bash script`, never `source script`:** the script sets `-euo pipefail`, which under `source`
+  applies to the calling shell — one failed preflight exits the login shell and drops the allocation.
+
+  `sbatch bash/test_osie.sh` (with `--export=ALL,SEED=1`) still works unchanged; the `#SBATCH` block is
+  retained. Nothing in the body depends on which path is used — the directives are inert comments when
+  the script is executed directly, `SLURM_NODELIST` has a fallback, and `SEED` is read from the
+  environment either way. Every tunable in the top block is overridable from the environment.
+
+  Two consequences of the interactive path, both handled in the script:
+  - **There is no `logs/osie_out_<jobid>.log`** — everything lands in the terminal. This is why
+    `test.py`'s stdout is tee'd into `log/seed$SEED/stdout.txt`: the headline `SM / MM / SED` is a bare
+    `print()` (§3.5a) and scrollback is not an artefact.
+  - **The image mount is non-fatal.** Several invocations share one allocation, so `mount_image.py`
+    finds the image already mounted from the first run and exits non-zero; under `set -e` that would
+    abort before any precondition ran. `conda activate "$ISP_ENV"` is the real check and still fails
+    loudly. `MOUNT_IMAGE=0` skips the attempt.
+
+  Re-runs are cheap: Stage B is guarded by `check_features.py`'s exit code, so feature extraction is
+  skipped once the cache is complete (`FORCE_FEATURES=1` overrides).
+
   *(Retargeted 2026-09-09 from `bash/test_cocofv.sh`; note the `py -m pip` → `python -m pip` fix —
   the `py` launcher is Windows-only and does not exist on the cluster.)*
 - Its CPU preflight tools, runnable from the repo root on Windows or a login node:
@@ -172,7 +197,13 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
   - There is no `normalize_fixations.py`: the OSIE branch's shipped
     `ISP/OSIE/GazeformerISP/src/data/fixations.json` is already canonical (§3.1), so there is no
     transform to apply. See §3.7 for the *other* OSIE label file and why it must not be used.
-- Its tests: `py -m pytest tests/osie_prep -q` (34 tests). No fixtures or cluster data needed.
+- The seed-sweep aggregator (FR13.3), run **once, after all three seeds have landed**, from
+  `ISP/OSIE/GazeformerISP/` on a login node — stdlib only, no GPU, no torch:
+  `python <repo>/tools/osie_prep/aggregate_seeds.py --log-dir result/OSIE-ex-10to15/log
+  --out result/OSIE-ex-10to15/log/metrics_sweep.json
+  --markdown result/OSIE-ex-10to15/log/metrics_sweep.md`
+  — JSON on **stdout**, the markdown table on stderr unless `--markdown` names a file. See §3.5b.
+- Its tests: `py -m pytest tests/osie_prep -q` (58 tests). No fixtures or cluster data needed.
 
 ---
 
@@ -220,7 +251,9 @@ few-shot-scanpath/
 │   ├── __init__.py                 #   OsiePreflightError
 │   ├── check_fixations.py          #   FR3.5 invariants; equal-subject (c) and duration-bin (g)
 │   │                               #   above all (stdlib only)
-│   └── check_features.py           #   FR4.6; THE ONLY torch importer here; exit code drives the guard
+│   ├── check_features.py           #   FR4.6; THE ONLY torch importer here; exit code drives the guard
+│   └── aggregate_seeds.py          #   FR13.3 seed-sweep pooling → metrics_sweep.{json,md} (stdlib
+│                                   #   only). Added 2026-09-09; see §3.5b
 │
 ├── bash/test_osie.sh               # ◀ OUR code. The single sbatch script for F1
 │
@@ -332,18 +365,58 @@ copy every seed would land on the same path.
 Three properties of this that are easy to get wrong:
 
 1. **The headline `SM / MM / SED` line is a bare `print()`, not `logger.info()`** (`test.py`, last line
-   of `main()`). It goes to **stdout** — the SLURM job log — and *not* into `log_test_subject_*.txt`.
-   Keep the SLURM stdout log; it is the only place those three numbers appear.
+   of `main()`). It goes to **stdout** and *not* into `log_test_subject_*.txt`.
+   *(Fixed at the call site 2026-09-09: `bash/test_osie.sh` pipes `test.py` through `tee` into
+   `log/seed$SEED/stdout.txt`, so the headline is now a per-seed artefact the sweep owns. Before that
+   its only home was `logs/osie_out_<jobid>.log`, named by **job id**, not by seed — three seeds meant
+   three logs distinguishable only by submission order. The logger's `StreamHandler` writes to stderr,
+   so the metric lines and tqdm stay out of the tee'd file. Keep the SLURM logs anyway.)*
 2. **`cur_metrics_std` is computed and discarded.** `comprehensive_evaluation_by_subject()` returns
-   means *and* standard deviations, but `test.py` logs only the means. **D6 asks for both**, so a spec
-   reporting D6 in full needs the additive, print-only edit that logs the std block. Note the asymmetry
-   when writing it: `cur_metrics_std` is populated for `MultiMatch`, `ScanMatch` and `VAME` **only** —
-   `retrieval scanmatch w/ duration` exists in `cur_metrics` alone, so a parallel-structure loop
-   `KeyError`s.
-3. **The metrics live only in a log file.** There is no machine-readable metrics artefact — recovering a
-   number means parsing formatted text. This is the concrete argument for **F6**, which re-derives every
-   metric from `prediction.json` + `fixations.json` on CPU and can emit them as data. Until F6 exists,
-   treat the log files as primary and do not delete them.
+   means *and* standard deviations, but `test.py` logs only the means. **D6 asks for both.**
+   *(Decided 2026-09-09: `test.py` stays **unmodified** for F1, as Roadmap F1 already records. D6's
+   std is supplied for now by the **across-seed** spread from the sweep, and the per-cell
+   `cur_metrics_std` is **deferred to F6**, which recomputes everything from `prediction.json` on CPU
+   and can emit both. The two are different quantities — see §3.5b — and must never be presented as
+   one.)* Should that decision ever be revisited, the edit is additive and print-only, and note the
+   asymmetry when writing it: `cur_metrics_std` is populated for `MultiMatch`, `ScanMatch` and `VAME`
+   **only** — `retrieval scanmatch w/ duration` exists in `cur_metrics` alone, so a parallel-structure
+   loop `KeyError`s.
+3. **The metrics live only in a log file.** There is no machine-readable metrics artefact *from
+   `test.py`* — recovering a number means parsing formatted text. `tools/osie_prep/aggregate_seeds.py`
+   (§3.5b) now does that parsing once and emits JSON, but it can only report what was logged; it is a
+   reader, not a re-scorer. The full argument for **F6** stands: F6 re-derives every metric from
+   `prediction.json` + `fixations.json` on CPU. Treat the log files as primary and do not delete them.
+
+### 3.5b The seed sweep and its two different "std" ◀ 2026-09-09
+
+Inference is stochastic (`Sampling.random_sample()`), so one seed is a point, not a band. FR13.3's
+sweep is `--seed 0 1 2`; `bash/test_osie.sh` preserves four artefacts per seed under
+`result/<eval>/log/seed$SEED/` — `log_test_subject_*.txt`, `prediction.json`, `stdout.txt` (the
+headline), and `versions.txt` (the resolved stack, D5, and the thing §1.1 says every run must record).
+
+`tools/osie_prep/aggregate_seeds.py` pools them into `metrics_sweep.json` + `metrics_sweep.md`. It is
+stdlib-only, imports no frozen code (D1), and recomputes no metric from scanpaths — it only re-derives
+the two published *composites* (`SM` = harmonic mean of the two ScanMatch variants, `MM` = mean of the
+five MultiMatch dimensions, §4) from means the authors' evaluator already produced, then cross-checks
+them against each seed's printed headline.
+
+> **The two standard deviations are not interchangeable.**
+> **Across-seed** (what the sweep reports): spread over **runs**, n = 3 — "how much does this number
+> move if I re-sample?" Sample std, ddof = 1, and at n = 3 a noisy estimate, so min/max ride alongside
+> it and the range should be reported too.
+> **Per-cell** (`cur_metrics_std`, discarded by `test.py`, deferred to F6): spread over
+> **(image, subject) cells** within one run — "how much does this vary across the test set?"
+> A write-up that labels one as the other is reporting a quantity it did not measure.
+
+Two guards exist because pooling the wrong runs yields a plausible, wrong band — the D7 failure mode:
+the `seed` in each log's arg namespace must equal its directory's seed (catching a mis-targeted copy
+step), and every argument that changes *what is measured* must be identical across seeds (catching a
+sweep that silently mixes two `--subject_num` values or two `--fix_dir` files, including the §3.7
+duration-bin trap). Both raise rather than warn.
+
+The tool also annotates two things D6 would otherwise report misleadingly: `pr5` is **structurally
+saturated** at `100.0` whenever `subject_num <= 5`, and OSIE's `p2g()` computes `r3` as `rank < 3`, so
+`pr3` really is R@3 here — the `rank < 2` defect in §4.2 is COCO_FV's, not this branch's.
 
 ### 3.6 EVE bridge artefacts (Stage A output, added 2026-09-08)
 

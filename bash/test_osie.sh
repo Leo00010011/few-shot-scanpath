@@ -12,9 +12,29 @@
 # OSIE few-shot query-set evaluation -- Roadmap F1 baseline.
 # Spec: spec/2026-09-08-osie-eval-baseline/
 #
-#   sbatch bash/test_osie.sh                              # SEED=0
-#   sbatch --export=ALL,SEED=1 bash/test_osie.sh
-#   sbatch --export=ALL,SEED=2 bash/test_osie.sh
+# PRIMARY PATH -- interactive, under salloc. Easier to debug, and the way the F1
+# sweep is actually being run:
+#
+#   salloc --gres=gpu:1 --cpus-per-task=4 --mem=16G --time=08:00:00
+#   bash bash/test_osie.sh                     # SEED=0
+#   SEED=1 bash bash/test_osie.sh
+#   SEED=2 bash bash/test_osie.sh
+#
+#   *** `bash script`, never `source script`. ***
+#   `set -euo pipefail` below is scoped to the script when it is executed, but with
+#   `source` it applies to YOUR shell -- one failed preflight and the allocation's
+#   login shell exits, taking the allocation with it.
+#
+# The #SBATCH block above is retained so `sbatch bash/test_osie.sh` (with
+# `--export=ALL,SEED=1` for the other seeds) still works unchanged. Nothing in the
+# body depends on which path is used: the directives are inert comments when the
+# script is executed directly, SLURM_NODELIST has a fallback, and SEED is read from
+# the environment either way.
+#
+# One difference that matters when running manually: there is no
+# logs/osie_out_<jobid>.log. Everything lands in your terminal. That is precisely
+# why test.py's stdout is tee'd into log/seed$SEED/stdout.txt further down -- the
+# headline SM/MM/SED line is a bare print(), and scrollback is not an artefact.
 #
 # Retargeted 2026-09-09 from bash/test_cocofv.sh when F1 reverted to OSIE.
 # Every tunable below is overridable from the environment, so a variant run needs
@@ -63,8 +83,21 @@ FIX_JSON="${FIX_JSON:-$BRANCH_DIR/src/data/fixations.json}"
 EMB_NPY="${EMB_NPY:-$BRANCH_DIR/src/data/embeddings.npy}"
 
 cd "$HOME_DIR"
-echo "Mounting image"
-sudo mount_image.py my_env.ext4 --rw
+# Non-fatal on purpose. Under the interactive salloc path the script is run several
+# times inside ONE allocation (three seeds, plus debug re-runs), and the image is
+# already mounted from the first invocation -- a second mount_image.py exits non-zero
+# and `set -e` would abort the run before a single precondition had been checked.
+# Skipping the guard costs nothing: if the mount genuinely did not happen, the
+# `conda activate "$ISP_ENV"` below fails loudly and immediately, which is the real
+# check. Set MOUNT_IMAGE=0 to skip the attempt entirely.
+MOUNT_IMAGE="${MOUNT_IMAGE:-1}"
+if [ "$MOUNT_IMAGE" = "1" ]; then
+  echo "Mounting image (non-fatal; already-mounted is expected on a re-run)"
+  sudo mount_image.py my_env.ext4 --rw || \
+    echo "  mount_image.py returned $? -- continuing; conda activate is the real check"
+else
+  echo "MOUNT_IMAGE=0, skipping mount"
+fi
 
 # ---- FR2.4: cheap preconditions before anything expensive ------------------
 if [ ! -d "$OSIE_IMAGE_ROOT" ]; then
@@ -99,8 +132,16 @@ ln -sf "$CKPT" "$BRANCH_DIR/$EVAL_DIR/checkpoints/checkpoint_best.pth"
 source "$HOME_DIR/miniconda3/etc/profile.d/conda.sh"
 conda activate "$ISP_ENV"
 
-# ---- FR1.2: resolved versions into the SLURM log ---------------------------
-python - <<'PY'
+# ---- FR1.2: resolved versions into the SLURM log AND into a kept artefact --
+# D5 requires every run to be self-describing, and TechStack section 1.1 is blunt
+# about why this one matters: F1's green run used an env several major versions
+# newer than ISP/environment.yml, and "consistent with the published numbers" is a
+# coarser test than bitwise equality. A future discrepancy can only be attributed
+# if each run's resolved stack was written down. The SLURM log is named by job id,
+# not by seed, so the version dump is also teed into a file the per-seed copy step
+# below preserves.
+mkdir -p "$OSIE_WORK"
+python - <<'PY' | tee "$OSIE_WORK/versions.txt"
 import importlib, sys
 print("python", sys.version.replace("\n", " "))
 for m in ("torch", "numpy", "scipy", "skimage", "multimatch_gaze", "cv2"):
@@ -246,6 +287,22 @@ fi
 # so the loader yields 70 batches at --batch 1 and 18 at the default --batch 4.
 # The shipped prediction.json's 350 records = 70 images x 5 subjects confirms the
 # published number covers the full split. (Roadmap F1, closed 2026-09-09.)
+#
+# stdout is TEE'd, and that is not cosmetic. The headline `SM / MM / SED` line is a
+# bare print() on the last line of main(), so it lands on stdout and NEVER in
+# log_test_subject_*.txt (TechStack section 3.5a note 1). The SLURM log that would
+# otherwise be its only home is named by JOB ID, not by seed, so after a three-seed
+# sweep the three headline numbers sit in three logs/osie_out_<jobid>.log files with
+# nothing but submission order to tell them apart. Teeing into the seed directory
+# makes each seed's headline an artefact the sweep owns.
+#
+# The logger's StreamHandler writes to stderr, so the metric lines and tqdm stay out
+# of this file; it captures the version dump, the preflight commentary and the
+# headline. `set -o pipefail` is on, so test.py's exit status still fails the job.
+RESULT_LOG="result/$(basename "$EVAL_DIR")/log"
+SEED_DIR="$RESULT_LOG/seed$SEED"
+mkdir -p "$SEED_DIR"
+
 CUDA_VISIBLE_DEVICES=0 python src/test.py \
   --fewshot_subject $FEWSHOT_SUBJECTS \
   --subject_num "$SUBJECT_NUM" \
@@ -257,16 +314,41 @@ CUDA_VISIBLE_DEVICES=0 python src/test.py \
   --emb_dir  "$EMB_NPY" \
   --img_dir  "$OSIE_IMAGE_ROOT" \
   --evaluation_dir "$EVAL_DIR" \
-  --user_emb_path "$USER_EMB"
+  --user_emb_path "$USER_EMB" \
+  | tee "$SEED_DIR/stdout.txt"
 
 # ---- FR15.2: preserve per-seed artefacts before the next seed overwrites ----
 # All three seeds write the same log_test_subject_10_0.txt (the filename tracks
 # --num_fewshot/--random_support, neither of which affects a query-set score:
-# select_fewshot_subject() returns early when split != 'train').
-RESULT_LOG="result/$(basename "$EVAL_DIR")/log"
-mkdir -p "$RESULT_LOG/seed$SEED"
+# select_fewshot_subject() returns early when split != 'train'). test.py truncates
+# that file at the top of main(), so each seed's copy holds exactly one run's block
+# despite the FileHandler's mode='a'.
+#
+# Four artefacts per seed, which is what tools/osie_prep/aggregate_seeds.py needs to
+# pool the runs without guessing: the metric block + resolved arg namespace, the
+# generated scanpaths, the headline line, and the resolved environment (D5).
 cp "$RESULT_LOG"/log_test_subject_*.txt \
    "$RESULT_LOG/prediction.json" \
-   "$RESULT_LOG/seed$SEED/"
+   "$SEED_DIR/"
+cp "$OSIE_WORK/versions.txt" "$SEED_DIR/versions.txt"
+cp "$OSIE_WORK/preflight_fixations.json" "$SEED_DIR/preflight_fixations.json"
+
+echo "Preserved seed $SEED artefacts under $BRANCH_DIR/$SEED_DIR:"
+ls -la "$SEED_DIR"
+
+# ---- FR13.3: aggregate once every seed has landed --------------------------
+# Not run here -- a single invocation only ever holds its own seed. After the last of
+#   bash bash/test_osie.sh                        # SEED=0
+#   SEED=1 bash bash/test_osie.sh
+#   SEED=2 bash bash/test_osie.sh
+# finishes, from $BRANCH_DIR (stdlib only, no GPU -- so it also runs on a login node
+# once the allocation is released, or on the Windows checkout with `py`):
+#   python "$PROJECT_DIR/tools/osie_prep/aggregate_seeds.py" \
+#       --log-dir "$RESULT_LOG" --out "$RESULT_LOG/metrics_sweep.json" \
+#       --markdown "$RESULT_LOG/metrics_sweep.md"
+# It cross-checks that the pooled runs really are replicates and emits the D6 block
+# with an ACROSS-SEED spread. That spread is not cur_metrics_std -- see the module
+# docstring; the per-cell std stays deferred to F6.
+echo "Seeds present so far: $(ls -d "$RESULT_LOG"/seed* 2>/dev/null | tr '\n' ' ')"
 
 echo "Finished at: $(date)"

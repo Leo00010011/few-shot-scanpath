@@ -23,7 +23,7 @@
 | ID | Feature | Status | Blocked by |
 |---|---|---|---|
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
-| F1 | Reproduce the **OSIE** eval baseline on the cluster | ◐ FIRST RUN GREEN (2026-09-09); seed sweep + `notes.md` outstanding | — |
+| F1 | Reproduce the **OSIE** eval baseline on the cluster | ◐ FIRST RUN GREEN (2026-09-09); sweep tooling done, sweep run + `notes.md` outstanding | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ◐ BUILT (2026-09-08), blocked on data | **OPEN-5** |
 | F3 | Subject embeddings for our subjects | ⏸ TODO | F2, **OPEN-2**, **OPEN-5** |
 | F4 | Feature extraction for our stimuli | ⏸ TODO | F2, **OPEN-5**, **OPEN-6** |
@@ -92,7 +92,8 @@ Built 2026-09-09 (CPU, Windows dev machine), retargeted from the COCO-FreeView t
       and `check_features.py` (FR4.6). No `normalize_fixations.py`: OSIE's shipped
       `data/osie_fixations_update_duration.json` is already canonical (§3.1 schema, `train`/`validation`/
       `test`, `condition="freeview"`, `task="none"`), so there is nothing to normalise.
-- [x] `bash/test_osie.sh` — the single `sbatch` script, all tunables overridable from the environment.
+- [x] `bash/test_osie.sh` — the single run script (run interactively under `salloc`; `sbatch` still
+      works), all tunables overridable from the environment.
 - [x] **The `i_batch > 100` cap is inert for OSIE — the roadmap's long-standing "decide and document"
       item is closed by observation, not by a judgement call.** `OSIE_evaluation.__len__` returns the
       number of **images**, not records: the `test` split is 70 images × 15 subjects = 1050 records, so
@@ -131,12 +132,30 @@ Cluster run, 2026-09-09:
       READMEs' `osie-ex-10to15` / `subject_embedding` variants do not occur on disk.
 - [x] FR6.6 confirmed: the checkpoint is `{"model": OrderedDict}` of 273 pure tensors, **no
       `subject_embed.weight` key** — the query subjects' embedding is genuinely the one in play.
-- [ ] Run the seed sweep at `--seed 0 1 2` (FR13.3) so "within sampling noise" has a measured spread
-      behind it. Inference is stochastic (`Sampling.random_sample()`), so a single seed is a point, not
-      a band. `bash/test_osie.sh` already preserves per-seed artefacts under `log/seed$SEED/`.
+- [x] **Sweep tooling complete (2026-09-09), sweep itself not yet submitted.** Three gaps that would
+      have made a three-seed sweep unaggregatable are closed, all at the call site — `test.py` remains
+      unmodified:
+      - `bash/test_osie.sh` now tees `test.py`'s stdout into `log/seed$SEED/stdout.txt`. The headline
+        `SM / MM / SED` is a bare `print()` and never reaches `log_test_subject_*.txt`; its only other
+        home is `logs/osie_out_<jobid>.log`, named by **job id**, so three seeds produced three logs
+        distinguishable only by submission order ([TechStack.md](TechStack.md) §3.5a).
+      - the resolved-version dump is teed to `versions.txt` and preserved per seed, so D5's "record
+        the stack" holds per run — the point [TechStack.md](TechStack.md) §1.1 insists on.
+      - `tools/osie_prep/aggregate_seeds.py` (stdlib only, login-node runnable, 24 tests) pools the
+        seed directories into `metrics_sweep.json` + `metrics_sweep.md`. It **raises** if a directory's
+        seed disagrees with the seed in its logged arg namespace, or if any argument that changes what
+        is measured differs between seeds — pooling non-replicates is the D7 failure mode here.
+- [ ] Run the seed sweep at `--seed 0 1 2` (FR13.3) — needs the cluster:
+      `bash bash/test_osie.sh`, then `SEED=1 bash ...` and `SEED=2 bash ...` under one `salloc`. Then run the aggregator once
+      (command in [TechStack.md](TechStack.md) §1).
 - [ ] Write `notes.md`: environment, staged data, preflight counters, **the actual metric table vs the
       paper's OSIE row**, the denominators, and the verdict. The numbers exist only in the run's log
-      files so far; they are not yet recorded in the repo.
+      files so far; they are not yet recorded in the repo. Blocked on the sweep above.
+
+**D6's standard deviations, settled 2026-09-09:** `test.py` stays unmodified, so `cur_metrics_std` is
+still discarded. D6's std is supplied by the sweep's **across-seed** spread, and the **per-cell** std
+is deferred to F6. These are different quantities and the write-up must not conflate them —
+[TechStack.md](TechStack.md) §3.5b states which is which.
 
 **Done when:** SM / MM / SED land within the three-seed noise band of the published OSIE row, and the
 exact command + env are recorded in `notes.md`. *(First seed: consistent. Sweep and write-up pending.)*
