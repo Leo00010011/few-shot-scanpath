@@ -3,8 +3,9 @@
 > Constitution file 3 of 3. Read together with [Mission.md](Mission.md) and [TechStack.md](TechStack.md).
 > Last updated: 2026-09-09
 >
-> **Current phase: F1 — Reproduce the OSIE baseline.** Nothing else starts until F1 produces
-> numbers. The preflight tooling and the run script are built and tested; the cluster run is pending.
+> **Current phase: F1 — Reproduce the OSIE baseline. FIRST GREEN RUN 2026-09-09.** The pipeline ran
+> end to end on the cluster and the metrics came back consistent with the published OSIE row. What is
+> left is the seed sweep and the write-up, not the plumbing. **F6 is unblocked.**
 >
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
@@ -22,12 +23,12 @@
 | ID | Feature | Status | Blocked by |
 |---|---|---|---|
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
-| F1 | Reproduce the **OSIE** eval baseline on the cluster | ◐ TOOLING BUILT (2026-09-09), awaiting cluster run | GPU allocation |
+| F1 | Reproduce the **OSIE** eval baseline on the cluster | ◐ FIRST RUN GREEN (2026-09-09); seed sweep + `notes.md` outstanding | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ◐ BUILT (2026-09-08), blocked on data | **OPEN-5** |
 | F3 | Subject embeddings for our subjects | ⏸ TODO | F2, **OPEN-2**, **OPEN-5** |
 | F4 | Feature extraction for our stimuli | ⏸ TODO | F2, **OPEN-5**, **OPEN-6** |
 | F5 | Our-dataset eval branch + run script | ⏸ TODO | F2, F3, F4, **OPEN-5** |
-| F6 | Offline re-scorer (`prediction.json` → metrics) | ⏸ TODO | F1 |
+| F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **UNBLOCKED** (2026-09-09) — F1 produced its fixture | — |
 | F7 | Results write-up + validity statement | ⏸ TODO | F5, F6 |
 
 Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸ TODO · ✗ DROPPED
@@ -66,7 +67,7 @@ OPEN-6└───────┬───────┘                │
 
 ## 3. Features
 
-### F1 — Reproduce the OSIE eval baseline on the cluster ◐ TOOLING BUILT
+### F1 — Reproduce the OSIE eval baseline on the cluster ◐ FIRST RUN GREEN
 
 Spec: [`spec/2026-09-08-osie-eval-baseline/`](../2026-09-08-osie-eval-baseline/)
 (requirements · plan · validation). Satisfies D1, D5, D6, D7, D8.
@@ -111,21 +112,34 @@ Built 2026-09-09 (CPU, Windows dev machine), retargeted from the COCO-FreeView t
       reduces to `image_data()`; `text_data()` need not run (and its `__main__` is broken — `args.p` is
       undefined, so `image_data()` is called directly rather than running the module).
 
-Remaining, all cluster-only:
+Cluster run, 2026-09-09:
 
-- [ ] Build the `isp` env; record deviations from the [TechStack.md](TechStack.md) §1 pin list, and
-      enforce `multimatch-gaze == 0.1.3` (FR1.3).
-- [ ] Stage the OSIE 800×600 stimuli into the path `--dataset_path` points at (Stage B only —
-      `test.py` never opens an image; `OSIE_evaluation.__getitem__` loads only the `.pth` feature).
-- [ ] Verify the on-disk case of `OSIE-ex-10to15` vs `osie-ex-10to15`, and `user` vs `subject` in the
-      embedding filenames; symlink the checkpoint and the subject embedding (FR6).
-- [ ] Confirm the checkpoint's state dict carries no `subject_embed.weight` key (FR6.6).
-- [ ] Run Stage B, then the query-set evaluation at `--seed 0 1 2` (FR13.3).
-- [ ] Write `notes.md`: environment, staged data, preflight counters, the metric table vs the paper's
-      OSIE row, the denominators, and the verdict.
+- [x] **The `isp` env was never built — the run used a pre-existing env (`scanpath`) far newer than the
+      pin list, and the metrics still came back consistent with the published row.** python 3.11.14,
+      torch 2.10.0+cu126, torchvision 0.25.0+cu126, numpy **2.1.2**, scipy 1.14.1, plus `scikit-image`,
+      `opencv-python` and `multimatch-gaze==0.1.3` installed into it. This is the single largest
+      deviation in the project and it is now an *empirical* result rather than a risk — see
+      [TechStack.md](TechStack.md) §1.1, which records what was verified and what was not.
+- [x] **The pipeline ran end to end and the metrics came back consistent with the published OSIE row.**
+      This is F1's whole purpose discharged: the environment, the released checkpoint, the released
+      subject embedding, Stage B, the loader, and the frozen metric code are now known-good *as a
+      system*, so any discrepancy F5 produces on EVE data is attributable to the data, not the setup.
+- [x] Stimuli staged flat at `$PROJECT_DIR/data/stimuli` (700 × 800×600, `1001.jpg`–`1700.jpg`), under
+      the git-ignored `data/`. Stage B only — `test.py` never opens an image.
+- [x] On-disk case resolved by observation: `weights/OSIE-20260904T121550Z-1-001/OSIE/` carries
+      `checkpoint_best.pth` and `fewshot_user_embedding_10.pt` — the spellings `test.py` expects. The
+      READMEs' `osie-ex-10to15` / `subject_embedding` variants do not occur on disk.
+- [x] FR6.6 confirmed: the checkpoint is `{"model": OrderedDict}` of 273 pure tensors, **no
+      `subject_embed.weight` key** — the query subjects' embedding is genuinely the one in play.
+- [ ] Run the seed sweep at `--seed 0 1 2` (FR13.3) so "within sampling noise" has a measured spread
+      behind it. Inference is stochastic (`Sampling.random_sample()`), so a single seed is a point, not
+      a band. `bash/test_osie.sh` already preserves per-seed artefacts under `log/seed$SEED/`.
+- [ ] Write `notes.md`: environment, staged data, preflight counters, **the actual metric table vs the
+      paper's OSIE row**, the denominators, and the verdict. The numbers exist only in the run's log
+      files so far; they are not yet recorded in the repo.
 
 **Done when:** SM / MM / SED land within the three-seed noise band of the published OSIE row, and the
-exact command + env are recorded in `notes.md`.
+exact command + env are recorded in `notes.md`. *(First seed: consistent. Sweep and write-up pending.)*
 
 **Note on `R@5`:** with `--subject_num 5` every rank lies in `{0..4}`, so `p2g`'s `r5` is identically
 `100.0`. It is still reported (D6 names R@5) but must be annotated as structurally saturated.
@@ -389,10 +403,10 @@ defect in the bundle export.
 |---|---|---|
 | ISP-SENet checkpoints | already in `weights/` (git-ignored) | F1, F5 |
 | ~~COCO-FreeView stimuli / fixation labels~~ | ~~staged on the cluster~~ | ~~F1~~ — dropped 2026-09-09, see §4 |
-| OSIE stimulus images (800×600 `.jpg`) | NUS-VIP `predicting-human-gaze-beyond-pixels` repo | **F1** (Stage B only) |
+| ~~OSIE stimulus images (800×600 `.jpg`)~~ | NUS-VIP repo — **obtained 2026-09-09**, staged flat at `$PROJECT_DIR/data/stimuli` (git-ignored) | ~~F1~~ ✓ |
 | Detectron2 | source install, per HAT repo | F3 (option 1 only) |
 | MSDeformAttn | `SE-Net/src/pixel_decoder/ops/make.sh` | F3 (option 1 only) |
-| `stsb-roberta-base-v2` | sentence-transformers hub | F1, F4 |
-| Mask R-CNN R50-FPN COCO weights | torchvision download | F1, F4 |
+| ~~`stsb-roberta-base-v2`~~ | ~~sentence-transformers hub~~ — **not needed**: every branch ships `embeddings.npy`, `text_data()` is never called, and `bash/test_osie.sh` stubs the import (TechStack §1.1) | ~~F1~~, F4 only if regenerating |
+| Mask R-CNN R50-FPN COCO weights | torchvision download — **obtained 2026-09-09** (Stage B ran) | ~~F1~~ ✓, F4 |
 | `evedataset` wheel + `bundle.h5` | `eve_shared/EveDataset/` (installed, git-ignored) | F2 |
-| cluster allocation with an NVIDIA GPU | — | F1, F3, F4, F5 |
+| cluster allocation with an NVIDIA GPU | — (F1 ran on `hpc-gpu1`, env `scanpath`) | ~~F1~~ ✓, F3, F4, F5 |

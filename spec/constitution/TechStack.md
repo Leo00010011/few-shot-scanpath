@@ -65,6 +65,60 @@ Created from `ISP/environment.yml`. CUDA 11.6 toolchain pinned into the env.
 > reached. (`GazeParser` appears in `evaltools/scanmatch.py` but only inside a docstring; the module
 > imports `numpy` alone. It is not a dependency.)
 
+### 1.1 What F1 actually ran on — the pin list is softer than it looks ◀ 2026-09-09
+
+**F1's green run did not use `isp` at all.** It used a pre-existing cluster env (`scanpath`) that is
+several major versions newer than anything above, and it reproduced the published OSIE numbers anyway.
+
+| | pinned (`ISP/environment.yml`) | F1's actual run | |
+|---|---|---|---|
+| python | 3.8.18 | **3.11.14** | |
+| torch | 1.13.1+cu116 | **2.10.0+cu126** | |
+| torchvision | 0.14.1 | **0.25.0+cu126** | |
+| numpy | 1.24.3 | **2.1.2** | major version jump |
+| scipy | 1.9.3 | **1.14.1** | |
+| scikit-image / opencv | 0.19.3 / 4.9.0.80 | installed to satisfy imports | |
+| **multimatch-gaze** | **0.1.3** | **0.1.3** | the one pin that was held |
+
+Why this did not break, established by reading and then by testing the frozen code directly under
+numpy 2.1.2 on the dev machine before the run:
+
+- **No removed numpy aliases anywhere in the tree** — no `np.float`, `np.int`, `np.bool`, `np.object`,
+  `np.bool8`, `np.NaN`, `np.product`. The 1.20→1.24→2.0 removals have nothing to bite on.
+- **All five metrics execute and return sane values under numpy 2.1.2 / scipy 1.14.1**: MultiMatch
+  `docomparison` (including the pad-to-length-3 path), ScanMatch with and without duration, SED, STDE,
+  and `scipy.stats.hmean`.
+- **`from scipy.misc import imresize` at `visual_attention_metrics.py:57` is a dead path.** It is inside
+  a function the SED/STDE call sites never reach. `scipy.misc.imresize` has been gone since scipy 1.3,
+  so this would have broken the *pinned* env too — it is not a modern-scipy problem.
+- **`torch.load`'s `weights_only=True` default (torch ≥ 2.6) is harmless here.** `checkpoint_best.pth`
+  is `{"model": OrderedDict}` of plain tensors — no argparse `Namespace`, no optimizer state — and the
+  `*_user_embedding.pt` files are bare tensors. Nothing needs an allowlist. The call sites in
+  `dataset.py`, `gazeformer.py` and `test.py` pass no `weights_only=` and do not need to.
+
+> **What this licenses, and what it does not.** It is now established that the frozen metric suite
+> *runs* on a modern stack and lands on the published OSIE row. It is **not** established that it is
+> bit-identical to the pinned env — there is no python 3.8 on the dev machine to diff against, and
+> "consistent with the published numbers" is a coarser test than bitwise equality. ScanMatch and SED are
+> integer/string operations and barely exposed; MultiMatch and STDE are float paths and are the place
+> any drift would show. **Every run must therefore record its resolved versions** (D5) so a future
+> discrepancy can be attributed. Do not quietly assume two runs on different stacks are comparable
+> because F1 was fine.
+
+Practical consequences for F5 and anyone reusing an env:
+
+- `ISP_ENV` in `bash/test_osie.sh` is a tunable precisely so an existing env can be used. Install into
+  it with `--no-deps` — an unconditional `pip install` lets pip resolve multimatch-gaze's numpy/scipy/
+  pandas requirements and move versions other work depends on. The script does this conditionally and
+  then *verifies* the 0.1.3 pin, which is what actually enforces it.
+- **`sentence-transformers` need not be installed.** `preprocess/feature_extractor.py` imports
+  `SentenceTransformer` at module scope but uses it only at line 63, inside `text_data()` — never called,
+  because every branch ships its `embeddings.npy`. `bash/test_osie.sh` registers a stub module in
+  `sys.modules` before importing `image_data`, which avoids pulling `transformers` + `tokenizers` (and
+  pip's opinion about torch) into a shared env. Call-site only; the upstream file is untouched.
+- Building `isp` from `ISP/environment.yml` remains unattempted, and on this evidence unnecessary for
+  eval-only work.
+
 ### `senet` — SE-Net (subject embeddings, Stage C)
 Created from `SE-Net/environment.yml`. **Not needed for F1**, and not needed at all unless OPEN-2 is
 resolved toward generating our own embeddings.
@@ -261,6 +315,35 @@ Written by `get_prediction_list()` to `result/<evaluation_dir basename>/log/pred
 `{"name", "subject", "X", "Y", "T"}` with `X`/`Y` cast to `int` and `T` back to **milliseconds**
 (`int(round(t * 1000, 3))`). Same schema as `fixations.json` minus `length`/`split`/`condition`/`task`,
 which makes it re-scorable offline.
+
+### 3.5a Where the metrics actually land (Stage E) ◀ verified on F1's run, 2026-09-09
+
+Under `result/<evaluation_dir basename>/log/` — for F1, `result/OSIE-ex-10to15/log/`:
+
+| artefact | contents |
+|---|---|
+| `log_test_subject_{num_fewshot}_{random_support}.txt` | the full resolved arg namespace (D5), then every **mean** in `cur_metrics`: MultiMatch's 5 dims, ScanMatch w/ and w/o duration, SED, STDE, and the retrieval block (MRR, R@1/3/5) |
+| `prediction.json` | §3.5 schema; for F1, 350 records = 70 images × 5 subjects |
+
+`bash/test_osie.sh` copies both into `log/seed$SEED/` before the next seed overwrites them — the filename
+tracks `--num_fewshot`/`--random_support`, neither of which varies across a seed sweep, so without the
+copy every seed would land on the same path.
+
+Three properties of this that are easy to get wrong:
+
+1. **The headline `SM / MM / SED` line is a bare `print()`, not `logger.info()`** (`test.py`, last line
+   of `main()`). It goes to **stdout** — the SLURM job log — and *not* into `log_test_subject_*.txt`.
+   Keep the SLURM stdout log; it is the only place those three numbers appear.
+2. **`cur_metrics_std` is computed and discarded.** `comprehensive_evaluation_by_subject()` returns
+   means *and* standard deviations, but `test.py` logs only the means. **D6 asks for both**, so a spec
+   reporting D6 in full needs the additive, print-only edit that logs the std block. Note the asymmetry
+   when writing it: `cur_metrics_std` is populated for `MultiMatch`, `ScanMatch` and `VAME` **only** —
+   `retrieval scanmatch w/ duration` exists in `cur_metrics` alone, so a parallel-structure loop
+   `KeyError`s.
+3. **The metrics live only in a log file.** There is no machine-readable metrics artefact — recovering a
+   number means parsing formatted text. This is the concrete argument for **F6**, which re-derives every
+   metric from `prediction.json` + `fixations.json` on CPU and can emit them as data. Until F6 exists,
+   treat the log files as primary and do not delete them.
 
 ### 3.6 EVE bridge artefacts (Stage A output, added 2026-09-08)
 

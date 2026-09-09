@@ -1,7 +1,7 @@
 # Mission
 
 > Constitution file 1 of 3. Read together with [TechStack.md](TechStack.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-08
+> Last updated: 2026-09-09
 
 ---
 
@@ -42,11 +42,17 @@ The model is *personalized*: prediction `i` is meaningful only when scored again
 **diagonal** is the personalized score and whose **off-diagonal** feeds a retrieval metric. Any off-by-one
 in subject index produces plausible-looking but meaningless numbers.
 
-**P3 — Metric fidelity.**
+**P3 — Metric fidelity.** *(validated end-to-end 2026-09-09 — Roadmap F1)*
 The metric suite has non-obvious contracts: durations in seconds inside the fixation vectors but
 milliseconds inside ScanMatch; a fixed 16×12 spatial binning tied to a specific screen resolution;
 short scanpaths padded to length 3 before MultiMatch; NaN elimination that silently changes the
 denominator. These must be preserved, not "cleaned up".
+
+The F1 baseline run reproduced the published OSIE row using the authors' unmodified metric code, so the
+contracts above are now known to be honoured by our call sites and not merely believed to be. Two
+caveats ride along: the run used a much newer numpy/torch than the pin list, which is validated only at
+the resolution of "matches the published numbers", not bitwise ([TechStack.md](TechStack.md) §1.1); and
+`test.py` reports means only, discarding the standard deviations D6 asks for (§3.5a).
 
 **P4 — Cohort structure.** *(discovered 2026-09-08, unsolved — Roadmap OPEN-5)*
 The evaluator's square score matrix presupposes that every stimulus was seen by *every* subject in the
