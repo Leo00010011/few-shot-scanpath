@@ -24,20 +24,59 @@
 
 The repo requires **two separate conda environments** — they are not compatible and must not be merged:
 
-### `isp` — ISP / Gazeformer (inference, Stage D + E)
+> **Corrected 2026-09-09.** Earlier revisions of this section carried **one** pin table between the two
+> environment headings, implying it described both. It does not — those values are
+> `SE-Net/environment.yml`'s. The two environments differ on nearly every version, which is precisely
+> why §1 says they "must not be merged". The tables are now separate and each is labelled with the file
+> it was read from. **F1's FR1 records deviations against the `isp` column**, not the `senet` one.
+> The mislabelling was found on 2026-09-09 while diagnosing an `EnvironmentNameNotFound: isp`.
+
+### `isp` — ISP / Gazeformer (inference, Stage D + E) ◀ the env F1 and F5 need
 Created from `ISP/environment.yml`. CUDA 11.6 toolchain pinned into the env.
 
-### `senet` — SE-Net (subject embeddings, Stage C)
-Created from `SE-Net/environment.yml`.
+| package | pin (`ISP/environment.yml`) | notes |
+|---|---|---|
+| python | 3.8.18 | |
+| pytorch | 1.13.1 (cu116) | conda, `py3.8_cuda11.6_cudnn8.3.2_0`; + torchaudio 0.13.1 |
+| torchvision | **0.14.1**, *not* the file's `0.16.2` | see the warning below — this is a defect in the file |
+| numpy | 1.24.3 | structured-array dtype behaviour matters to the metrics |
+| scipy | 1.9.3 | `scipy.stats.hmean` for the SM headline number |
+| scikit-image | 0.19.3 | |
+| **multimatch-gaze** | **0.1.3** | **metric-critical — pin exactly.** Identical in both envs |
+| sentence-transformers | 3.0.1 | imported at module scope by `feature_extractor.py` (Stage B) |
+| opencv-python | 4.9.0.80 | |
+| timm | 0.9.16 | not used on the ISP eval path |
 
-| package | pin | notes |
+> **`ISP/environment.yml` is a dirty `conda env export`, not a curated spec.** 518 conda packages with
+> exact build strings — the full CUDA 11.6 toolkit, the `anaconda` metapackage, Spyder, Jupyter, Scrapy —
+> plus 117 pip entries. Two consequences:
+>
+> 1. **It is internally inconsistent.** Conda pins `pytorch=1.13.1`; pip pins `torchvision==0.16.2`,
+>    which requires torch 2.1.2. Creating the env from the file as written lets pip pull torch 2.1.2 over
+>    the conda PyTorch. The correct partner for torch 1.13.1 is **torchvision 0.14.1**.
+> 2. **Solving it is slow and often unsatisfiable** on a base image other than the authors'. Building a
+>    minimal env from the ISP column above is the supported path; record it as an FR1 deviation with the
+>    resolved `conda list` / `pip freeze` attached, per D5.
+>
+> The ISP **eval** path (`src/test.py` and everything it reaches) imports only: `torch`, `torchvision`,
+> `numpy`, `scipy`, `skimage`, `cv2`, `multimatch_gaze`, `PIL`, `pandas`, `matplotlib`, `tqdm`.
+> Stage B adds `sentence_transformers` — needed at *import* time even though only `image_data()` is
+> called, because `feature_extractor.py` imports it at module scope. Nothing else in the 635 entries is
+> reached. (`GazeParser` appears in `evaltools/scanmatch.py` but only inside a docstring; the module
+> imports `numpy` alone. It is not a dependency.)
+
+### `senet` — SE-Net (subject embeddings, Stage C)
+Created from `SE-Net/environment.yml`. **Not needed for F1**, and not needed at all unless OPEN-2 is
+resolved toward generating our own embeddings.
+
+| package | pin (`SE-Net/environment.yml`) | notes |
 |---|---|---|
 | python | 3.8.0 | do not upgrade; `scikit-learn==0.22.2` will not build on 3.10+ |
 | pytorch | 1.11.0 (cu113) | + torchvision 0.12.0, torchaudio 0.11.0 |
-| numpy | 1.23.5 | structured-array dtype behaviour matters to the metrics |
-| scipy | 1.10.0 | `scipy.stats.hmean` for the SM headline number |
+| numpy | 1.23.5 | |
+| scipy | 1.10.0 | |
 | scikit-image | 0.19.2 | |
-| **multimatch-gaze** | **0.1.3** | **metric-critical — pin exactly** |
+| **multimatch-gaze** | **0.1.3** | same pin as `isp` |
 | timm | 0.6.13 | SE-Net Swin backbone |
 | sentence-transformers | 2.2.2 | task-text embeddings (`stsb-roberta-base-v2`) |
 | opencv-python | 4.7.0.72 | |

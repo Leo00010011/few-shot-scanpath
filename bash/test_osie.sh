@@ -37,7 +37,7 @@ OSIE_IMAGE_ROOT="${OSIE_IMAGE_ROOT:-$PROJECT_DIR/data/stimuli}"
 OSIE_WORK="${OSIE_WORK:-$PROJECT_DIR/work/osie}"   # BeeGFS -- features stream from here
 OSIE_DATA="${OSIE_DATA:-$OSIE_WORK/data}"
 WEIGHTS_DIR="${WEIGHTS_DIR:-$PROJECT_DIR/weights/OSIE-20260904T121550Z-1-001/OSIE}"
-ISP_ENV="${ISP_ENV:-isp}"
+ISP_ENV="scanpath"
 FEWSHOT_SUBJECTS="${FEWSHOT_SUBJECTS:-10 11 12 13 14}"
 SUBJECT_NUM="${SUBJECT_NUM:-5}"
 SEED="${SEED:-0}"
@@ -113,7 +113,17 @@ PY
 # ---- FR1.3: multimatch-gaze is metric-critical, pinned exactly --------------
 # `python -m pip`, not `py -m pip`: the `py` launcher is Windows-only and does not
 # exist on the cluster (TechStack section 1 command conventions).
-python -m pip install multimatch-gaze==0.1.3
+#
+# Install only if the pin is not already satisfied, and with --no-deps. $ISP_ENV may
+# be a pre-existing environment shared with other work (it is a tunable, and reusing
+# one is supported): an unconditional `pip install` lets pip resolve multimatch-gaze's
+# numpy/scipy/pandas requirements and silently move versions the rest of that env
+# depends on. The verification below is what actually enforces the pin -- so if the
+# --no-deps install leaves an unimportable package, this stops before the GPU is used.
+if ! python -c "import multimatch_gaze,sys; sys.exit(0 if multimatch_gaze.__version__=='0.1.3' else 1)" 2>/dev/null; then
+  echo "multimatch-gaze 0.1.3 not present; installing (--no-deps)"
+  python -m pip install --no-deps multimatch-gaze==0.1.3
+fi
 python - <<'PY'
 import sys
 import multimatch_gaze
@@ -182,7 +192,30 @@ if [ "$FORCE_FEATURES" = "1" ] || \
                                       --feat-dir "$OSIE_DATA/image_features" ; then
   echo "Extracting image features into $OSIE_DATA/image_features"
   PYTHONPATH="$BRANCH_DIR/src" python - "$STAGE_B_ROOT" "$OSIE_DATA" <<'PY'
-import sys, torch
+import sys, types, torch
+
+# feature_extractor.py does `from sentence_transformers import SentenceTransformer`
+# at MODULE scope, but the name is used only at line 63, inside text_data() -- which
+# this run never calls, because the branch ships embeddings.npy with the
+# "free-viewing" key already. Rather than pull sentence-transformers (and with it
+# transformers + tokenizers, and pip's opinion about which torch to have) into
+# $ISP_ENV just to satisfy an import, register a stub first. Call-site only; the
+# upstream file is untouched (working convention 2).
+if "sentence_transformers" not in sys.modules:
+    try:
+        import sentence_transformers  # noqa: F401  -- real one present, use it
+    except ImportError:
+        _stub = types.ModuleType("sentence_transformers")
+        class _Unavailable:                     # pragma: no cover - never constructed
+            def __init__(self, *a, **k):
+                raise RuntimeError(
+                    "sentence_transformers is stubbed: text_data() is not part of "
+                    "the OSIE run (embeddings.npy ships with the branch). Install "
+                    "the real package if you need to regenerate task embeddings.")
+        _stub.SentenceTransformer = _Unavailable
+        sys.modules["sentence_transformers"] = _stub
+        print("sentence_transformers stubbed (text_data() unused)")
+
 from preprocess.feature_extractor import image_data
 image_data(dataset_path=sys.argv[1], output_path=sys.argv[2],
            device=torch.device("cuda:0"), overwrite=False)
