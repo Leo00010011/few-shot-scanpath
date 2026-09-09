@@ -248,7 +248,38 @@ def test_no_seed_dirs_raises(tmp_path):
     os.makedirs(log_dir)
     with pytest.raises(OsiePreflightError) as exc:
         aggregate(log_dir)
-    assert "seed" in str(exc.value)
+    assert "no seed<N>/ directories" in str(exc.value)
+
+
+def test_absent_log_dir_is_distinguished_from_an_unrun_sweep(tmp_path):
+    # Telling someone to re-run three GPU jobs they already ran is the worst
+    # possible advice, so a missing directory must not read as a missing sweep.
+    missing = os.path.join(str(tmp_path), "log")
+    with pytest.raises(OsiePreflightError) as exc:
+        aggregate(missing)
+    msg = str(exc.value)
+    assert "does not exist" in msg
+    assert "run the sweep" not in msg
+
+
+def test_repo_root_invocation_gets_the_branch_relative_hint(tmp_path, monkeypatch):
+    # `result/<eval>/log` is anchored to ISP/<DATASET>/GazeformerISP/ by test.py, so
+    # a good sweep looks absent when the tool is run from the repo root.
+    monkeypatch.chdir(str(tmp_path))
+    with pytest.raises(OsiePreflightError) as exc:
+        aggregate("result/OSIE-ex-10to15/log")
+    msg = str(exc.value)
+    assert "GazeformerISP" in msg
+    assert "relative to" in msg
+
+
+def test_no_seed_dirs_lists_what_is_actually_there(tmp_path):
+    log_dir = os.path.join(str(tmp_path), "log")
+    os.makedirs(log_dir)
+    open(os.path.join(log_dir, "prediction.json"), "w").close()
+    with pytest.raises(OsiePreflightError) as exc:
+        aggregate(log_dir)
+    assert "prediction.json" in str(exc.value)
 
 
 def test_two_log_files_in_one_seed_dir_raises(tmp_path):

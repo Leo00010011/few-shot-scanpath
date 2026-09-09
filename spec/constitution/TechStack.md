@@ -198,16 +198,22 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
     `ISP/OSIE/GazeformerISP/src/data/fixations.json` is already canonical (§3.1), so there is no
     transform to apply. See §3.7 for the *other* OSIE label file and why it must not be used.
 - The seed-sweep aggregator / **run-record generator** (FR13.3), run **once, after all three seeds have
-  landed**, from `ISP/OSIE/GazeformerISP/` on a login node — stdlib only, no GPU, no torch:
+  landed**, **from the repo root** on a login node — stdlib only, no GPU, no torch:
   ```
-  python <repo>/tools/osie_prep/aggregate_seeds.py \
-    --log-dir   result/OSIE-ex-10to15/log \
-    --reference <repo>/spec/2026-09-08-osie-eval-baseline/paper_reference.json \
-    --out       result/OSIE-ex-10to15/log/metrics_sweep.json \
-    --report    <repo>/spec/2026-09-08-osie-eval-baseline/run_record.md
+  python tools/osie_prep/aggregate_seeds.py \
+    --log-dir   ISP/OSIE/GazeformerISP/result/OSIE-ex-10to15/log \
+    --reference spec/2026-09-08-osie-eval-baseline/paper_reference.json \
+    --out       ISP/OSIE/GazeformerISP/result/OSIE-ex-10to15/log/metrics_sweep.json \
+    --report    spec/2026-09-08-osie-eval-baseline/run_record.md
   ```
   JSON on **stdout**; the markdown table on stderr unless `--markdown` names a file. `--report` writes
   the generated run record — environment, denominators, the D6 table, the paper comparison. See §3.5b.
+
+  **Mind the working directory.** `result/<eval>/log` is anchored to `ISP/<DATASET>/GazeformerISP/` by
+  `test.py`, *not* to the repo root, so a bare `--log-dir result/OSIE-ex-10to15/log` resolves only from
+  inside the branch directory — from the repo root it looks like the sweep never ran. Running
+  everything from the repo root with the branch prefix (above) keeps all four paths in one frame.
+  The tool detects this specific mix-up and names it rather than reporting the sweep as missing.
 - Its tests: `py -m pytest tests/osie_prep -q` (74 tests). No fixtures or cluster data needed.
 
 ---

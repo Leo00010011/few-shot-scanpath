@@ -64,15 +64,16 @@ harmonic mean of the two ScanMatch variants, ``MM`` an arithmetic mean of the fi
 MultiMatch dimensions -- TechStack section 4) from numbers the authors' evaluator
 already produced.
 
-CLI, from the repo root or from ``ISP/OSIE/GazeformerISP/``::
-
-    py tools/osie_prep/aggregate_seeds.py --log-dir result/OSIE-ex-10to15/log
+CLI, **from the repo root**. Note that ``result/<eval>/log`` is anchored to
+``ISP/<DATASET>/GazeformerISP/`` by ``test.py``, *not* to the repo root, so it needs
+the branch prefix here while ``spec/...`` does not. Keeping every path in one frame
+is what avoids a half-and-half invocation::
 
     # the full run record -- this is the F1 deliverable
     py tools/osie_prep/aggregate_seeds.py \
-        --log-dir   result/OSIE-ex-10to15/log \
+        --log-dir   ISP/OSIE/GazeformerISP/result/OSIE-ex-10to15/log \
         --reference spec/2026-09-08-osie-eval-baseline/paper_reference.json \
-        --out       result/OSIE-ex-10to15/log/metrics_sweep.json \
+        --out       ISP/OSIE/GazeformerISP/result/OSIE-ex-10to15/log/metrics_sweep.json \
         --report    spec/2026-09-08-osie-eval-baseline/run_record.md
 
 Prints the aggregate as JSON on **stdout**; the markdown table and all commentary
@@ -330,15 +331,37 @@ def _seed_of(dirname):
 
 
 def collect_seed_dirs(log_dir):
+    # Distinguish "you are in the wrong directory" from "the sweep has not run".
+    # test.py anchors `result/<eval>/log` to ISP/<DATASET>/GazeformerISP/, so a
+    # perfectly good sweep looks like a missing one when the tool is invoked from
+    # the repo root -- and telling someone to re-run three GPU jobs they already
+    # ran is the worst possible advice here.
+    if not os.path.isdir(log_dir):
+        hint = ""
+        tail = log_dir.replace("\\", "/").lstrip("./")
+        if tail.startswith("result/"):
+            # Forward slashes deliberately: this hint is read on the cluster and
+            # pasted into a shell, so os.path.join's backslashes would be wrong.
+            branch_relative = "ISP/<DATASET>/GazeformerISP/" + tail
+            hint = (" Note that `result/...` is relative to "
+                    "ISP/<DATASET>/GazeformerISP/, not to the repo root -- from the "
+                    "repo root this is probably `{}` (e.g. ISP/OSIE/GazeformerISP/"
+                    "...).".format(branch_relative))
+        raise OsiePreflightError(
+            "--log-dir does not exist: {} (cwd: {}).{}".format(
+                log_dir, os.getcwd(), hint))
+
     found = []
     for path in sorted(glob.glob(os.path.join(log_dir, "seed*"))):
         seed = _seed_of(path)
         if seed is not None and os.path.isdir(path):
             found.append((seed, path))
     if not found:
+        present = sorted(os.listdir(log_dir))[:10]
         raise OsiePreflightError(
-            "no seed<N>/ directories under {}. bash/test_osie.sh writes them; run "
-            "the sweep before aggregating it.".format(log_dir))
+            "no seed<N>/ directories under {} (it contains: {}). bash/test_osie.sh "
+            "writes them, one per run; run the sweep before aggregating it.".format(
+                log_dir, ", ".join(present) if present else "nothing"))
     return sorted(found)
 
 
