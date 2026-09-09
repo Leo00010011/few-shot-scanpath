@@ -52,7 +52,9 @@ The F1 baseline run reproduced the published OSIE row using the authors' unmodif
 contracts above are now known to be honoured by our call sites and not merely believed to be. Two
 caveats ride along: the run used a much newer numpy/torch than the pin list, which is validated only at
 the resolution of "matches the published numbers", not bitwise ([TechStack.md](TechStack.md) §1.1); and
-`test.py` reports means only, discarding the standard deviations D6 asks for (§3.5a).
+`test.py` reports means only, discarding the per-cell standard deviations D6 asks for (§3.5a) — for F1
+those are supplied instead by the three-seed sweep's **across-seed** spread, a different quantity, with
+the per-cell std deferred to F6 (§3.5b).
 
 **P4 — Cohort structure.** *(discovered 2026-09-08, unsolved — Roadmap OPEN-5)*
 The evaluator's square score matrix presupposes that every stimulus was seen by *every* subject in the

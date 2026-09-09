@@ -197,13 +197,18 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
   - There is no `normalize_fixations.py`: the OSIE branch's shipped
     `ISP/OSIE/GazeformerISP/src/data/fixations.json` is already canonical (§3.1), so there is no
     transform to apply. See §3.7 for the *other* OSIE label file and why it must not be used.
-- The seed-sweep aggregator (FR13.3), run **once, after all three seeds have landed**, from
-  `ISP/OSIE/GazeformerISP/` on a login node — stdlib only, no GPU, no torch:
-  `python <repo>/tools/osie_prep/aggregate_seeds.py --log-dir result/OSIE-ex-10to15/log
-  --out result/OSIE-ex-10to15/log/metrics_sweep.json
-  --markdown result/OSIE-ex-10to15/log/metrics_sweep.md`
-  — JSON on **stdout**, the markdown table on stderr unless `--markdown` names a file. See §3.5b.
-- Its tests: `py -m pytest tests/osie_prep -q` (58 tests). No fixtures or cluster data needed.
+- The seed-sweep aggregator / **run-record generator** (FR13.3), run **once, after all three seeds have
+  landed**, from `ISP/OSIE/GazeformerISP/` on a login node — stdlib only, no GPU, no torch:
+  ```
+  python <repo>/tools/osie_prep/aggregate_seeds.py \
+    --log-dir   result/OSIE-ex-10to15/log \
+    --reference <repo>/spec/2026-09-08-osie-eval-baseline/paper_reference.json \
+    --out       result/OSIE-ex-10to15/log/metrics_sweep.json \
+    --report    <repo>/spec/2026-09-08-osie-eval-baseline/run_record.md
+  ```
+  JSON on **stdout**; the markdown table on stderr unless `--markdown` names a file. `--report` writes
+  the generated run record — environment, denominators, the D6 table, the paper comparison. See §3.5b.
+- Its tests: `py -m pytest tests/osie_prep -q` (74 tests). No fixtures or cluster data needed.
 
 ---
 
@@ -252,8 +257,8 @@ few-shot-scanpath/
 │   ├── check_fixations.py          #   FR3.5 invariants; equal-subject (c) and duration-bin (g)
 │   │                               #   above all (stdlib only)
 │   ├── check_features.py           #   FR4.6; THE ONLY torch importer here; exit code drives the guard
-│   └── aggregate_seeds.py          #   FR13.3 seed-sweep pooling → metrics_sweep.{json,md} (stdlib
-│                                   #   only). Added 2026-09-09; see §3.5b
+│   └── aggregate_seeds.py          #   FR13.3 seed-sweep pooling + GENERATED run record
+│                                   #   (--report). stdlib only. Added 2026-09-09; see §3.5b
 │
 ├── bash/test_osie.sh               # ◀ OUR code. The single sbatch script for F1
 │
@@ -269,7 +274,10 @@ few-shot-scanpath/
 └── spec/                           # ◀ our spec-driven-development workspace
     ├── constitution/{Mission,TechStack,Roadmap}.md
     └── YYYY-MM-DD-<slug>/{requirements,plan,validation}.md  (+ notes.md when a spec
-                                                              lands findings worth keeping)
+                                                              lands findings worth keeping;
+                                                              F1 instead carries a GENERATED
+                                                              run_record.md + a hand-transcribed
+                                                              paper_reference.json — §3.5b)
 ```
 
 **We adapt the `ISP/OSIE/GazeformerISP` branch.** Rationale: our dataset is free-viewing; OSIE is the only
@@ -414,9 +422,38 @@ step), and every argument that changes *what is measured* must be identical acro
 sweep that silently mixes two `--subject_num` values or two `--fix_dir` files, including the §3.7
 duration-bin trap). Both raise rather than warn.
 
-The tool also annotates two things D6 would otherwise report misleadingly: `pr5` is **structurally
-saturated** at `100.0` whenever `subject_num <= 5`, and OSIE's `p2g()` computes `r3` as `rank < 3`, so
-`pr3` really is R@3 here — the `rank < 2` defect in §4.2 is COCO_FV's, not this branch's.
+The tool also annotates three things D6 would otherwise report misleadingly: `pr5` is **structurally
+saturated** at `100.0` whenever `subject_num <= 5`; OSIE's `p2g()` computes `r3` as `rank < 3`, so
+`pr3` really is R@3 here (the `rank < 2` defect in §4.2 is COCO_FV's, not this branch's); and
+`SED_best`/`STDE_best` are aliases rather than a best-of-N (§4).
+
+#### The run record is generated, not written ◀ decided 2026-09-09
+
+There is deliberately **no hand-written `notes.md`** for F1. A file of copy-pasted numbers drifts from
+the artefacts the moment anything is re-run, and D5's claim is precisely that every reported number be
+re-derivable from artefacts alone. `aggregate_seeds.py --report` therefore generates the whole record
+on each invocation, reading all four stored outputs per seed — the metric log, `stdout.txt`,
+`versions.txt`, and `preflight_fixations.json` — and emitting the resolved environment, the
+denominators (including the D7 soft counters and the pad-to-3 consequence), the D6 table, and the
+comparison. Regenerate it; never hand-edit it.
+
+Two guards match the ones on the metric block, for the same reason: pooled seeds must share **one
+resolved stack** (§1.1 — otherwise the spread mixes sampling noise with a version change) and **one
+preflight fingerprint** (same split, same image/subject counts). Both raise. Absent artefacts are
+reported as absent rather than skipped, so a record that does not state its environment says so.
+
+Exactly two inputs are not derivable and are named as such in the output:
+
+| input | why it cannot be generated | where it lives |
+|---|---|---|
+| the paper's published OSIE row | **nothing in this repo contains it** — `result-images/main-result.png` is qualitative scanpath figures, the READMEs carry no table | `spec/2026-09-08-osie-eval-baseline/paper_reference.json`, transcribed once by hand, with `source` / `transcribed_by` / `transcribed_utc` provenance fields |
+| the verdict | what the numbers license, given the checkpoint trained on OSIE subjects 0–9 and scored on 10–14, is an argument rather than a measurement | the spec, and F7 |
+
+In the reference file a `null` means **not transcribed** and renders as `--`; it is never treated as
+zero and never as agreement. Do not guess a value to fill a hole — a wrong reference silently converts
+a real discrepancy into an apparent match, which is D7's failure mode applied to the comparison itself.
+The report's "within seed spread" column is descriptive only: at n = 3 the spread is a noisy estimate,
+and what counts as reproducing the row is F7's judgement, not the tool's.
 
 ### 3.6 EVE bridge artefacts (Stage A output, added 2026-09-08)
 
@@ -533,6 +570,14 @@ Non-obvious behaviour that must be preserved:
 - `is_eliminating_nan=True` (default) drops MultiMatch rows containing NaN before the mean; SED/STDE means
   do **not** get the same treatment.
 - Uninitialised cells are `-1`, not NaN — an all-`-1` result means the loop never ran, not a bad score.
+- **`SED_best` and `STDE_best` are aliases, not a best-of-N.** `evaluation.py` does
+  `SED_best_metrics = SED_metrics_rlts` (and the same for STDE) with no selection step, so
+  `SED_best ≡ SED` and `STDE_best ≡ STDE` **identically, in every configuration and at any
+  `--eval_repeat_num`**. Confirmed on F1's seed 0: `SED 7.3000 / SED_best 7.3000`,
+  `STDE 0.8460 / STDE_best 0.8460`. The name promises a selection the code never performs. They are
+  **not** a second, corroborating result and must never be reported as one — D6 names only `SED` and
+  `STDE`, and `aggregate_seeds.py` excludes the `_best` pair from its table for this reason (it emits
+  a note instead). Frozen under D1: documented, not fixed.
 
 **Headline numbers** (as printed by `test.py`):
 `SM = scipy.stats.hmean([scanmatch_wo_dur, scanmatch_w_dur])`, `MM = mean(5 MultiMatch dims)`, `SED`.

@@ -3,9 +3,11 @@
 > Constitution file 3 of 3. Read together with [Mission.md](Mission.md) and [TechStack.md](TechStack.md).
 > Last updated: 2026-09-09
 >
-> **Current phase: F1 — Reproduce the OSIE baseline. FIRST GREEN RUN 2026-09-09.** The pipeline ran
-> end to end on the cluster and the metrics came back consistent with the published OSIE row. What is
-> left is the seed sweep and the write-up, not the plumbing. **F6 is unblocked.**
+> **Current phase: F1 — Reproduce the OSIE baseline. SWEEP COMPLETE 2026-09-09.** The pipeline ran
+> end to end on the cluster and all three seeds (`0 1 2`) are computed, with per-seed artefacts
+> preserved. Seed 0's metrics were checked against the paper's OSIE row by hand and are close. What is
+> left is **generating the run record** (`aggregate_seeds.py --report`) and transcribing the paper's
+> row into `paper_reference.json` — not the plumbing, and no longer the sweep. **F6 is unblocked.**
 >
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
@@ -23,7 +25,7 @@
 | ID | Feature | Status | Blocked by |
 |---|---|---|---|
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
-| F1 | Reproduce the **OSIE** eval baseline on the cluster | ◐ FIRST RUN GREEN (2026-09-09); sweep tooling done, sweep run + `notes.md` outstanding | — |
+| F1 | Reproduce the **OSIE** eval baseline on the cluster | ◐ SWEEP COMPLETE (2026-09-09, seeds 0/1/2); generated run record + paper reference outstanding | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ◐ BUILT (2026-09-08), blocked on data | **OPEN-5** |
 | F3 | Subject embeddings for our subjects | ⏸ TODO | F2, **OPEN-2**, **OPEN-5** |
 | F4 | Feature extraction for our stimuli | ⏸ TODO | F2, **OPEN-5**, **OPEN-6** |
@@ -67,7 +69,7 @@ OPEN-6└───────┬───────┘                │
 
 ## 3. Features
 
-### F1 — Reproduce the OSIE eval baseline on the cluster ◐ FIRST RUN GREEN
+### F1 — Reproduce the OSIE eval baseline on the cluster ◐ SWEEP COMPLETE
 
 Spec: [`spec/2026-09-08-osie-eval-baseline/`](../2026-09-08-osie-eval-baseline/)
 (requirements · plan · validation). Satisfies D1, D5, D6, D7, D8.
@@ -145,12 +147,41 @@ Cluster run, 2026-09-09:
         seed directories into `metrics_sweep.json` + `metrics_sweep.md`. It **raises** if a directory's
         seed disagrees with the seed in its logged arg namespace, or if any argument that changes what
         is measured differs between seeds — pooling non-replicates is the D7 failure mode here.
-- [ ] Run the seed sweep at `--seed 0 1 2` (FR13.3) — needs the cluster:
-      `bash bash/test_osie.sh`, then `SEED=1 bash ...` and `SEED=2 bash ...` under one `salloc`. Then run the aggregator once
-      (command in [TechStack.md](TechStack.md) §1).
-- [ ] Write `notes.md`: environment, staged data, preflight counters, **the actual metric table vs the
-      paper's OSIE row**, the denominators, and the verdict. The numbers exist only in the run's log
-      files so far; they are not yet recorded in the repo. Blocked on the sweep above.
+- [x] **Seed sweep run 2026-09-09 (FR13.3): seeds 0, 1, 2 all computed**, interactively under one
+      `salloc` (`bash bash/test_osie.sh`, then `SEED=1 bash ...`, `SEED=2 bash ...`). Each seed's five
+      artefacts are preserved under `result/OSIE-ex-10to15/log/seed<N>/` — `log_test_subject_10_0.txt`,
+      `prediction.json`, `stdout.txt`, `versions.txt`, `preflight_fixations.json`. The whole sweep took
+      ~12 minutes wall clock; Stage B was cached after seed 0.
+      - Seed 0, verified self-consistent (composites re-derived from the logged means match the printed
+        headline to within `.4f`-vs-`round(x,3)` formatting): MultiMatch `.9412 / .6504 / .9222 / .8443
+        / .6566`, ScanMatch `.3798` w/o and `.3696` with duration, SED `7.3000`, STDE `.8460`,
+        retrieval `pmrr .4661 / pr1 21.1429 / pr3 60.5714 / pr5 100.0000`. Headline **SM 0.375,
+        MM 0.803, SED 7.3**. Compared against the paper's OSIE row by hand: close.
+      - `--seed` is properly wired — `test.py` seeds numpy, torch and CUDA and pins
+        `cudnn.deterministic=True` / `benchmark=False`, so the three runs draw genuinely different
+        samples and each is individually reproducible (D5).
+- [ ] Run `aggregate_seeds.py` over the three seed directories and commit the generated
+      `run_record.md` + `metrics_sweep.json` (command in [TechStack.md](TechStack.md) §1). **The
+      three-seed band is not yet recorded anywhere in the repo** — seed 0's numbers above are a point,
+      not the band F1's "done when" asks for.
+- [ ] Transcribe the paper's OSIE row into
+      [`spec/2026-09-08-osie-eval-baseline/paper_reference.json`](../2026-09-08-osie-eval-baseline/paper_reference.json)
+      — the template ships with every value `null` and its provenance fields blank. This is the
+      **only** hand-entered number in the F1 record, because nothing in the repo holds the published
+      table (`result-images/main-result.png` is qualitative, the READMEs carry none). Leave anything
+      you cannot read off the paper as `null`: a `null` renders as `--` meaning *unknown*, and a
+      guessed value would silently turn a real discrepancy into an apparent match.
+- [ ] Write F7's **verdict** — what the comparison licenses given the checkpoint was trained on OSIE
+      subjects 0–9 and scored on 10–14. This is an argument, not a measurement, so it is prose and
+      lives in the spec, not in the generated record.
+
+**There is deliberately no `notes.md`.** *(Decided 2026-09-09.)* A hand-written file of copy-pasted
+numbers drifts from the artefacts the moment anything is re-run, which is exactly what D5 exists to
+prevent. The run record is **generated** instead: `aggregate_seeds.py --report` reads the stored
+outputs — `log_test_subject_*.txt`, `stdout.txt`, `versions.txt`, `preflight_fixations.json` — and
+emits environment, denominators, the D6 table, and the paper comparison, every time, from artefacts
+alone. The two things it cannot derive (the published row and the verdict) are named as such in the
+output rather than quietly omitted. Regenerate it; never hand-edit it.
 
 **D6's standard deviations, settled 2026-09-09:** `test.py` stays unmodified, so `cur_metrics_std` is
 still discarded. D6's std is supplied by the sweep's **across-seed** spread, and the **per-cell** std
@@ -158,10 +189,19 @@ is deferred to F6. These are different quantities and the write-up must not conf
 [TechStack.md](TechStack.md) §3.5b states which is which.
 
 **Done when:** SM / MM / SED land within the three-seed noise band of the published OSIE row, and the
-exact command + env are recorded in `notes.md`. *(First seed: consistent. Sweep and write-up pending.)*
+exact command + env are recorded — in the **generated** `run_record.md`, not by hand. *(Sweep complete
+2026-09-09; the record and the paper reference are pending. Seed 0 compared favourably by hand, but a
+point is not a band and an off-repo check is not an artefact.)*
 
 **Note on `R@5`:** with `--subject_num 5` every rank lies in `{0..4}`, so `p2g`'s `r5` is identically
-`100.0`. It is still reported (D6 names R@5) but must be annotated as structurally saturated.
+`100.0`. Confirmed on all seeds (`pr5 = 100.0000`). It is still reported (D6 names R@5) but must be
+annotated as structurally saturated.
+
+**Note on `SED_best` / `STDE_best`:** they are **aliases of `SED` / `STDE`**, not a best-of-N —
+`evaluation.py` does `SED_best_metrics = SED_metrics_rlts` with no selection step, so they are
+identical in every configuration and at any `--eval_repeat_num` (seed 0: `7.3000 / 7.3000` and
+`0.8460 / 0.8460`). Reported side by side they read as two corroborating results; they are one number
+printed twice. Frozen under D1 — documented, not fixed. [TechStack.md](TechStack.md) §4.
 
 ---
 
@@ -290,6 +330,9 @@ artefacts alone, and is the natural test harness for F1/F5 (D5).
       bit-identical to the published configuration. Say which of the two was traded for the other.
 - [ ] State the **cohort** the OPEN-5 decision produced — how many participants, how many stimuli, and
       whether the retrieval block is reportable at all at that size.
+- [ ] State that `SED_best` / `STDE_best` are **aliases** of `SED` / `STDE`, not a best-of-N
+      (`evaluation.py` aliases them outright). Report `SED` and `STDE` once each; listing the `_best`
+      pair alongside them reads as corroboration that does not exist. [TechStack.md](TechStack.md) §4.
 - [ ] Carry `bridge_report.json`'s counters into the write-up: `short_scanpath` (padded inside the
       frozen evaluator, D7), `clamped_coords`, `incomplete_stimulus`, `stimulus_image_conflict`.
 

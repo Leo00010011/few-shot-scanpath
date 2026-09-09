@@ -15,6 +15,22 @@ write-up must never present one as the other. The per-cell std stays deferred to
 which recomputes every metric from ``prediction.json`` on CPU and can emit both.
 ``test.py`` is left unmodified for F1 (Roadmap F1), so this tool parses its log.
 
+**This tool is the run record.** There is deliberately no hand-written ``notes.md`` holding
+copy-pasted numbers: a transcribed table starts drifting from the artefacts the moment anything is
+re-run, and D5's whole claim is that every reported number be re-derivable from artefacts alone. So
+the report is *generated* from the stored outputs, every time, by ``--report``.
+
+Exactly two things cannot be derived and must be supplied by a human, and the report is explicit
+about both rather than silently omitting them:
+
+* **The paper's published row.** Nothing in this repository contains it — ``result-images/
+  main-result.png`` is qualitative scanpath figures and the READMEs carry no numbers. It is
+  transcribed once from the PDF into a ``--reference`` JSON (with its provenance recorded in the file)
+  and then it, too, is data.
+* **The verdict.** What the comparison licenses, given that the checkpoint was trained on OSIE
+  subjects, is an argument rather than a measurement. It belongs in the spec and in F7, not in a
+  generated file.
+
 What it reads, per ``seed<N>/`` directory produced by ``bash/test_osie.sh``:
 
 * ``log_test_subject_{num_fewshot}_{random_support}.txt`` -- the resolved arg
@@ -24,6 +40,14 @@ What it reads, per ``seed<N>/`` directory produced by ``bash/test_osie.sh``:
 * ``stdout.txt`` -- the headline ``SM / MM / SED`` line, which is a bare ``print()``
   and therefore never reaches the log file (TechStack section 3.5a note 1). Optional;
   when present it is used as an integrity cross-check, not as the source of truth.
+* ``versions.txt`` -- the resolved stack (D5). TechStack section 1.1 is blunt that "consistent with
+  the published numbers" is coarser than bitwise equality and that a future discrepancy can only be
+  attributed if each run's stack was written down. Pooled runs must share one stack, so a difference
+  raises for the same reason a differing ``--subject_num`` does.
+* ``preflight_fixations.json`` -- ``check_fixations.py``'s counters: which label file, which split,
+  how many images x subjects were actually scored, and the soft counters D7 requires be surfaced
+  (out-of-range coordinates, short scanpaths). This is what makes the report state its own
+  denominators instead of asserting them.
 
 Two guards, because averaging the wrong runs together is the failure mode that
 produces a plausible, wrong band (D7):
@@ -43,11 +67,18 @@ already produced.
 CLI, from the repo root or from ``ISP/OSIE/GazeformerISP/``::
 
     py tools/osie_prep/aggregate_seeds.py --log-dir result/OSIE-ex-10to15/log
-    py tools/osie_prep/aggregate_seeds.py --log-dir DIR --out metrics_sweep.json \
-        --markdown metrics_sweep.md
+
+    # the full run record -- this is the F1 deliverable
+    py tools/osie_prep/aggregate_seeds.py \
+        --log-dir   result/OSIE-ex-10to15/log \
+        --reference spec/2026-09-08-osie-eval-baseline/paper_reference.json \
+        --out       result/OSIE-ex-10to15/log/metrics_sweep.json \
+        --report    spec/2026-09-08-osie-eval-baseline/run_record.md
 
 Prints the aggregate as JSON on **stdout**; the markdown table and all commentary
-go to stderr unless ``--markdown`` names a file.
+go to stderr unless ``--markdown`` names a file. ``--report`` writes the generated
+run record: environment, denominators, metrics, and the comparison. Regenerate it,
+never hand-edit it.
 """
 
 import argparse
@@ -196,6 +227,80 @@ def parse_headline(path):
     return found
 
 
+def parse_versions(path):
+    """Parse ``versions.txt`` (``"<module> <version...>"`` per line) into a dict.
+
+    The python line carries the full ``sys.version`` with spaces in it, so only the
+    first token is the key and the rest is the value verbatim. A module that failed
+    to import was written as ``"<module> MISSING <error>"`` and is kept as such --
+    that is a fact about the run, not a parse failure.
+    """
+    if not os.path.isfile(path):
+        return None
+    versions = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2:
+                versions[parts[0]] = parts[1]
+    return versions or None
+
+
+def read_json(path):
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        try:
+            return json.load(handle)
+        except ValueError as exc:
+            raise OsiePreflightError("{}: not valid JSON ({})".format(path, exc))
+
+
+def check_versions(runs):
+    """Pooled runs must share one resolved stack (D5, TechStack section 1.1)."""
+    seen = {}
+    for run in runs:
+        if run["versions"] is None:
+            continue
+        key = json.dumps(run["versions"], sort_keys=True)
+        seen.setdefault(key, []).append(run["seed"])
+    if len(seen) > 1:
+        groups = [{"seeds": s, "versions": json.loads(k)} for k, s in seen.items()]
+        detail = "\n  ".join(
+            "seeds {}: {}".format(g["seeds"], g["versions"]) for g in groups)
+        raise OsiePreflightError(
+            "seed runs used DIFFERENT resolved stacks, so they are not replicates "
+            "and their spread would mix sampling noise with a version change "
+            "(TechStack section 1.1):\n  " + detail)
+    return json.loads(list(seen)[0]) if seen else None
+
+
+def check_preflight(runs):
+    """The runs must have scored the same data.
+
+    ``check_fixations.py`` already re-derives these per run; the point here is that
+    three runs over *different* label files or splits must not be pooled. Compared
+    on the fields that define what was scored -- not on ``fix_path``, which can
+    legitimately differ by absolute path.
+    """
+    fields = ("split", "fewshot_subjects", "origin_size", "n_images", "n_subjects",
+              "n_cells", "t_min_ms", "t_max_ms", "n_short", "oob")
+    seen = {}
+    for run in runs:
+        pre = run["preflight"]
+        if pre is None:
+            continue
+        key = json.dumps({f: pre.get(f) for f in fields}, sort_keys=True)
+        seen.setdefault(key, []).append(run["seed"])
+    if len(seen) > 1:
+        detail = "\n  ".join(
+            "seeds {}: {}".format(s, json.loads(k)) for k, s in seen.items())
+        raise OsiePreflightError(
+            "seed runs scored DIFFERENT data -- the preflight counters disagree, so "
+            "the runs are not replicates:\n  " + detail)
+    return json.loads(list(seen)[0]) if seen else None
+
+
 def composites(metrics):
     """Re-derive ``SM``/``MM``/``SED`` exactly as ``test.py``'s last lines do.
 
@@ -291,6 +396,11 @@ def read_seed(seed, seed_dir):
         "composites": derived,
         "headline_printed": headline,
         "headline_delta": headline_delta,
+        "versions": parse_versions(os.path.join(seed_dir, "versions.txt")),
+        "preflight": read_json(
+            os.path.join(seed_dir, "preflight_fixations.json")),
+        "has_prediction": os.path.isfile(
+            os.path.join(seed_dir, "prediction.json")),
     }
 
 
@@ -314,6 +424,26 @@ def check_invariant_args(runs):
             for name in INVARIANT_ARGS if name in reference["args"]}
 
 
+def _best_aliases_base(runs):
+    """True when every run has ``SED_best == SED`` and ``STDE_best == STDE``.
+
+    Structurally it always is -- see the note this feeds -- but it is checked
+    against the data rather than asserted, so the claim in the report is one this
+    run's own numbers support.
+    """
+    seen = False
+    for run in runs:
+        vame = run["metrics"].get("VAME", {})
+        for base in ("SED", "STDE"):
+            best = "{}_best".format(base)
+            if base not in vame or best not in vame:
+                return False
+            if vame[base] != vame[best]:
+                return False
+            seen = True
+    return seen
+
+
 def _spread(values):
     """Mean and spread of one metric across seeds.
 
@@ -333,9 +463,83 @@ def _spread(values):
     return entry
 
 
-def aggregate(log_dir):
+def load_reference(path):
+    """Load the transcribed published row, or ``None``.
+
+    The file is data with provenance, not a constant baked into this tool: nothing
+    in the repository contains the paper's numbers, so they are typed in once by a
+    human and the file records who did it and from where. Entries left ``null`` are
+    treated as not-yet-transcribed and reported as such -- an absent number must
+    read as absent, never as a zero or as agreement.
+    """
+    if path is None:
+        return None
+    reference = read_json(path)
+    if reference is None:
+        raise OsiePreflightError("--reference file not found: {}".format(path))
+    if not isinstance(reference, dict) or "metrics" not in reference:
+        raise OsiePreflightError(
+            "{}: expected an object with a 'metrics' key (and ideally 'source' / "
+            "'transcribed_by' for provenance)".format(path))
+    return reference
+
+
+def compare_to_reference(result, reference):
+    """Ours vs the published row, per metric, with the signed delta.
+
+    No tolerance and no verdict: a threshold for "close enough" is a scientific
+    judgement (F7's, and it depends on the seed spread), not something a parser
+    should assert. This reports the numbers and the gap; a human reads them.
+    """
+    rows = []
+    ref_metrics = reference.get("metrics") or {}
+    for metrics_key, metric_name in D6_ORDER:
+        ours = result["metrics"].get(metrics_key, {}).get(metric_name)
+        if ours is None:
+            continue
+        theirs = (ref_metrics.get(metrics_key) or {}).get(metric_name)
+        rows.append({
+            "metrics_key": metrics_key,
+            "metric_name": metric_name,
+            "ours_mean": ours["mean"],
+            "ours_std": ours["std"],
+            "paper": theirs,
+            "delta": None if theirs is None else ours["mean"] - theirs,
+            "within_seed_spread": (
+                None if theirs is None or ours["std"] is None
+                else abs(ours["mean"] - theirs) <= ours["std"]),
+        })
+    ref_comp = reference.get("composites") or {}
+    for name in ("SM", "MM", "SED"):
+        ours = result["composites"][name]
+        theirs = ref_comp.get(name)
+        rows.append({
+            "metrics_key": "headline",
+            "metric_name": name,
+            "ours_mean": ours["mean"],
+            "ours_std": ours["std"],
+            "paper": theirs,
+            "delta": None if theirs is None else ours["mean"] - theirs,
+            "within_seed_spread": (
+                None if theirs is None or ours["std"] is None
+                else abs(ours["mean"] - theirs) <= ours["std"]),
+        })
+    missing = [r["metric_name"] for r in rows if r["paper"] is None]
+    return {
+        "source": reference.get("source"),
+        "transcribed_by": reference.get("transcribed_by"),
+        "transcribed_utc": reference.get("transcribed_utc"),
+        "reference_notes": reference.get("notes"),
+        "rows": rows,
+        "not_transcribed": missing,
+    }
+
+
+def aggregate(log_dir, reference_path=None):
     runs = [read_seed(seed, path) for seed, path in collect_seed_dirs(log_dir)]
     shared_args = check_invariant_args(runs)
+    shared_versions = check_versions(runs)
+    shared_preflight = check_preflight(runs)
 
     keys = set()
     for run in runs:
@@ -367,6 +571,15 @@ def aggregate(log_dir):
         "rank < 2 defect documented in TechStack section 4.2 is COCO_FV's, not "
         "this branch's.",
     ]
+    if _best_aliases_base(runs):
+        notes.append(
+            "SED_best == SED and STDE_best == STDE, and always will: "
+            "evaluation.py does `SED_best_metrics = SED_metrics_rlts`, a bare alias "
+            "with no best-of-N selection (OSIE evaluation.py ~line 155). The name "
+            "promises a selection the code never performs, in every configuration "
+            "and at any --eval_repeat_num. They are NOT a second, corroborating "
+            "result -- never report them as one. Frozen under D1: documented, not "
+            "fixed. They are excluded from the D6 table for this reason.")
     if subject_num and subject_num <= 5:
         notes.append(
             "pr5 (R@5) is STRUCTURALLY SATURATED at 100.0: with subject_num={} "
@@ -377,22 +590,55 @@ def aggregate(log_dir):
         notes.append("INCOMPLETE across seeds, pooled over fewer runs: {}".format(
             ", ".join(incomplete)))
 
-    return {
+    if shared_versions is None:
+        notes.append(
+            "No versions.txt in any seed directory -- the resolved stack is NOT "
+            "recorded for this sweep, so a future discrepancy cannot be attributed "
+            "to it (D5, TechStack section 1.1).")
+    if shared_preflight is None:
+        notes.append(
+            "No preflight_fixations.json in any seed directory -- the denominators "
+            "below are unverified: what was actually scored is not recorded.")
+
+    result = {
         "log_dir": log_dir,
         "n_seeds": len(runs),
         "seeds": [run["seed"] for run in runs],
         "shared_args": shared_args,
+        "environment": shared_versions,
+        "preflight": shared_preflight,
         "composites": composite,
         "metrics": metrics,
         "d6_order": [list(_) for _ in D6_ORDER],
         "per_seed": [
             {"seed": run["seed"], "log_file": run["log_file"],
              "composites": run["composites"],
-             "headline_printed": run["headline_printed"]}
+             "headline_printed": run["headline_printed"],
+             "has_prediction": run["has_prediction"]}
             for run in runs
         ],
         "notes": notes,
     }
+
+    reference = load_reference(reference_path)
+    if reference is not None:
+        result["comparison"] = compare_to_reference(result, reference)
+        if result["comparison"]["not_transcribed"]:
+            notes.append(
+                "The reference file leaves {} not transcribed: {}. Those rows show "
+                "the paper column as '--', which means UNKNOWN, not "
+                "agreement.".format(
+                    len(result["comparison"]["not_transcribed"]),
+                    ", ".join(result["comparison"]["not_transcribed"])))
+    else:
+        notes.append(
+            "No --reference given, so there is NO comparison to the published row "
+            "in this report. Nothing in the repository contains the paper's "
+            "numbers (result-images/main-result.png is qualitative), so they must "
+            "be transcribed once from the PDF into a reference JSON. Until then "
+            "'consistent with the published row' rests on an off-repo hand check "
+            "and cannot be re-derived from artefacts.")
+    return result
 
 
 def _fmt(entry, places=4):
@@ -430,6 +676,141 @@ def to_markdown(result):
     return "\n".join(out)
 
 
+def _num(value, places=4):
+    return "--" if value is None else "{:.{p}f}".format(value, p=places)
+
+
+def to_report(result):
+    """The full F1 run record, generated from the stored artefacts.
+
+    This is what a hand-written notes.md would have contained, except that every
+    number is read back from the run's own outputs on each invocation, so it cannot
+    drift from them. The two things it cannot generate -- the published row and the
+    verdict -- are named as such rather than quietly left out.
+    """
+    seeds = ", ".join(str(_) for _ in result["seeds"])
+    env = result["environment"] or {}
+    pre = result["preflight"] or {}
+    args = result["shared_args"]
+    out = [
+        "# OSIE eval baseline — generated run record",
+        "",
+        "Generated by `tools/osie_prep/aggregate_seeds.py` from the artefacts under",
+        "`{}`. **Do not hand-edit** — regenerate it instead; every number below is".format(
+            result["log_dir"]),
+        "read back from the run's own stored outputs, which is what makes it",
+        "re-derivable without a GPU (D5).",
+        "",
+        "## Run",
+        "",
+        "| | |",
+        "|---|---|",
+        "| seeds | {} (n = {}) |".format(seeds, result["n_seeds"]),
+    ]
+    for key in ("evaluation_dir", "user_emb_path", "fix_dir", "feat_dir", "emb_dir",
+                "subject_num", "fewshot_subject", "num_fewshot", "random_support",
+                "eval_repeat_num", "width", "height", "max_length"):
+        if key in args:
+            out.append("| `{}` | `{}` |".format(key, args[key]))
+    out.append("| `prediction.json` kept per seed | {} |".format(
+        "yes" if all(_["has_prediction"] for _ in result["per_seed"]) else "NO"))
+    out.append("")
+
+    out.append("## Environment (D5 — resolved, not pinned)")
+    out.append("")
+    if env:
+        out.append("| package | resolved |")
+        out.append("|---|---|")
+        for name, version in env.items():
+            out.append("| {} | {} |".format(name, version))
+        out.append("")
+        out.append("Compare against `ISP/environment.yml` — TechStack §1.1 records why a newer stack")
+        out.append("is tolerated here and exactly what that does and does not license.")
+    else:
+        out.append("*Not recorded — no `versions.txt` in the seed directories.*")
+    out.append("")
+
+    out.append("## What was scored (the denominators)")
+    out.append("")
+    if pre:
+        out.append("| | |")
+        out.append("|---|---|")
+        for key in ("split", "n_images", "n_subjects", "n_cells", "n_records_total",
+                    "fewshot_subjects", "origin_size", "t_min_ms", "t_max_ms",
+                    "gt_length_min", "gt_length_median", "gt_length_max"):
+            if key in pre:
+                out.append("| {} | `{}` |".format(key, pre[key]))
+        for key in ("oob", "n_short"):
+            if key in pre:
+                out.append("| {} (D7 counter) | `{}` |".format(key, pre[key]))
+        out.append("")
+        if pre.get("n_short"):
+            out.append(
+                "> `n_short` = {} scanpaths shorter than 3 fixations. The frozen evaluator pads "
+                "these to length 3 with `(1., 1., 1e-3)` and the padded array then replaces the "
+                "original for *all* subsequent metrics in that cell (TechStack §4).".format(
+                    pre["n_short"]))
+            out.append("")
+    else:
+        out.append("*Not recorded — no `preflight_fixations.json` in the seed directories.*")
+        out.append("")
+
+    out.append("## Metrics")
+    out.append("")
+    out.append(to_markdown(result))
+
+    comparison = result.get("comparison")
+    if comparison:
+        out.append("## Versus the published OSIE row")
+        out.append("")
+        if comparison.get("source"):
+            out.append("Source: {}".format(comparison["source"]))
+        prov = [_ for _ in (comparison.get("transcribed_by"),
+                            comparison.get("transcribed_utc")) if _]
+        if prov:
+            out.append("Transcribed by {}.".format(", ".join(str(_) for _ in prov)))
+        if comparison.get("reference_notes"):
+            out.append("")
+            out.append(comparison["reference_notes"])
+        out.append("")
+        # No literal "|" in a header cell -- it would split the column.
+        out.append("| metric | ours (mean) | ±(seed) | paper | delta | within seed spread |")
+        out.append("|---|---|---|---|---|---|")
+        for row in comparison["rows"]:
+            label = ("**{}**".format(row["metric_name"])
+                     if row["metrics_key"] == "headline"
+                     else "{} / {}".format(row["metrics_key"], row["metric_name"]))
+            within = ("" if row["within_seed_spread"] is None
+                      else ("yes" if row["within_seed_spread"] else "**no**"))
+            out.append("| {} | {} | {} | {} | {} | {} |".format(
+                label, _num(row["ours_mean"]), _num(row["ours_std"]),
+                _num(row["paper"]), _num(row["delta"]), within))
+        out.append("")
+        out.append("`--` in the paper column means **not transcribed**, not agreement.")
+        out.append("")
+        out.append("> The last column is a *descriptive* check — whether the gap is smaller than this")
+        out.append("> sweep's own re-sampling spread. It is not a pass/fail criterion: at n = 3 the")
+        out.append("> spread is a noisy estimate, and what counts as reproducing the row is F7's")
+        out.append("> judgement to state, not this tool's to assert.")
+    else:
+        out.append("## Versus the published OSIE row")
+        out.append("")
+        out.append("*No `--reference` supplied — this report contains no comparison.* Nothing in the")
+        out.append("repository holds the paper's numbers (`result-images/main-result.png` is")
+        out.append("qualitative), so they must be transcribed once from the PDF into a reference")
+        out.append("JSON, with provenance, before the comparison can be re-derived from artefacts.")
+    out.append("")
+
+    out.append("## What this does not settle")
+    out.append("")
+    out.append("The verdict — what these numbers license, given that the checkpoint was trained on")
+    out.append("OSIE subjects 0–9 and the query set is subjects 10–14 — is an argument, not a")
+    out.append("measurement, and is deliberately not generated here. It belongs in the spec and in")
+    out.append("F7. See `spec/constitution/Mission.md` §5 and Roadmap F7.")
+    out.append("")
+    return "\n".join(out)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Aggregate an OSIE seed sweep into one metric block (FR13.3)")
@@ -440,10 +821,18 @@ def main(argv=None):
                         help="write the JSON here as well as to stdout")
     parser.add_argument("--markdown", dest="markdown_path", default=None,
                         help="write the markdown table here instead of to stderr")
+    parser.add_argument("--reference", dest="reference_path", default=None,
+                        help="JSON holding the paper's published row, transcribed "
+                             "once by hand with its provenance; enables the "
+                             "comparison table")
+    parser.add_argument("--report", dest="report_path", default=None,
+                        help="write the full generated run record here (env, "
+                             "denominators, metrics, comparison). This replaces a "
+                             "hand-written notes.md -- regenerate, never hand-edit")
     args = parser.parse_args(argv)
 
     try:
-        result = aggregate(args.log_dir)
+        result = aggregate(args.log_dir, reference_path=args.reference_path)
     except OsiePreflightError as exc:
         sys.stderr.write("FATAL aggregation failure: {}\n".format(exc))
         return 1
@@ -461,6 +850,11 @@ def main(argv=None):
         sys.stderr.write("aggregate_seeds: wrote {}\n".format(args.markdown_path))
     else:
         sys.stderr.write("\n" + table)
+
+    if args.report_path:
+        with open(args.report_path, "w", encoding="utf-8") as handle:
+            handle.write(to_report(result))
+        sys.stderr.write("aggregate_seeds: wrote {}\n".format(args.report_path))
 
     sys.stderr.write("aggregate_seeds: OK -- {} seeds {}\n".format(
         result["n_seeds"], result["seeds"]))
