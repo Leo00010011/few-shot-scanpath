@@ -2,3 +2,5 @@
 *.pt
 *.h5
 __pycache__/
+*.npy
+*.json
