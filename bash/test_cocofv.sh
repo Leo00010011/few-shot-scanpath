@@ -27,9 +27,16 @@ echo "Running on node: ${SLURM_NODELIST:-<not under slurm>}"
 # ---- tunables (FR8.4) ------------------------------------------------------
 HOME_DIR="${HOME_DIR:-/mnt/beegfs/home/leonardo.ulloa}"
 PROJECT_DIR="${PROJECT_DIR:-$HOME_DIR/projects/few-shot-scanpath}"
-FV_IMAGE_ROOT="${FV_IMAGE_ROOT:-$PROJECT_DIR/data/COCO_FV}"
-FV_FIX_JSON="${FV_FIX_JSON:-$PROJECT_DIR/data/coco_fv_fixations_update_duration.json}"
+# The COCO-FreeView data is staged under the *other* project, per train_ms.sh.
+# Note the space in "Coco FreeView" -- every expansion of these must stay quoted.
+FV_DATA_ROOT="${FV_DATA_ROOT:-$HOME_DIR/projects/From-Noisy-Eye-Tracking-To-Scanpath/data/Coco FreeView}"
+# FR2.1 wants ONE root whose immediate children are category dirs. The staging area
+# has TWO (COCOSearch18-images-TP and -TA) and its category dirs are space-named
+# ("potted plant"), while the loader keys on the underscored task ("potted_plant").
+# FV_IMAGE_ROOT must therefore point at a merged, underscored root -- see notes below.
 FV_WORK="${FV_WORK:-$PROJECT_DIR/work/cocofv}"   # BeeGFS -- features stream from here (FR4.7)
+FV_IMAGE_ROOT="${FV_IMAGE_ROOT:-$FV_WORK/stimuli}"
+FV_FIX_JSON="${FV_FIX_JSON:-$FV_DATA_ROOT/COCOFreeView_fixations_trainval.json}"
 ISP_ENV="${ISP_ENV:-isp}"
 FEWSHOT_SUBJECTS="${FEWSHOT_SUBJECTS:-0 1 2}"
 SUBJECT_NUM="${SUBJECT_NUM:-3}"
