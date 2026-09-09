@@ -570,6 +570,13 @@ def test_shipped_reference_template_is_valid_and_unfilled(repo_root):
     # numbers: every metric entry starts null until a human transcribes the PDF.
     path = os.path.join(repo_root, "spec", "2026-09-08-osie-eval-baseline",
                         "paper_reference.json")
+    # This assertion is the canary for the .gitignore trap: a blanket `*.json` rule
+    # once swallowed this file so silently that it never showed as untracked and
+    # simply was not present on the next checkout. `!spec/**/*.json` negates it.
+    assert os.path.isfile(path), (
+        "paper_reference.json is missing from the checkout. If it exists locally "
+        "but not in git, check `git check-ignore -v {}` -- the blanket `*.json` "
+        "rule in .gitignore must stay negated by `!spec/**/*.json`.".format(path))
     with open(path, "r", encoding="utf-8") as handle:
         ref = json.load(handle)
     assert "metrics" in ref and "composites" in ref

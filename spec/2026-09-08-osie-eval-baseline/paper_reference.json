@@ -1,0 +1,58 @@
+{
+  "_README": [
+    "The published OSIE row, transcribed by hand from the paper. This is the ONE part of",
+    "the F1 run record that cannot be generated: nothing in this repository contains the",
+    "paper's numbers -- result-images/main-result.png is qualitative scanpath figures and",
+    "the READMEs carry no table -- so they are typed in once, here, with provenance, and",
+    "from then on they are data like everything else.",
+    "",
+    "Fill in the values you can read off the paper and LEAVE THE REST null. A null is",
+    "reported as '--' meaning UNKNOWN; it is never treated as zero and never as agreement.",
+    "Do not guess a number to fill a hole -- a wrong reference silently turns a real",
+    "discrepancy into an apparent match, which is the D7 failure mode applied to the",
+    "comparison itself.",
+    "",
+    "Used by:  aggregate_seeds.py --reference spec/2026-09-08-osie-eval-baseline/paper_reference.json",
+    "Schema:   metrics{<metrics_key>{<metric_name>: number|null}}, composites{SM,MM,SED}",
+    "          keys match evaluation.py's cur_metrics exactly.",
+    "",
+    "Note on what to transcribe: the paper's OSIE row for the SAME configuration this run",
+    "used -- few-shot personalized prediction, 10-shot, the 5 unseen query subjects. A row",
+    "for a different shot count or a different subject split is not a comparable number."
+  ],
+
+  "source": null,
+  "transcribed_by": null,
+  "transcribed_utc": null,
+  "notes": null,
+
+  "metrics": {
+    "MultiMatch": {
+      "vector": null,
+      "direction": null,
+      "length": null,
+      "position": null,
+      "duration": null
+    },
+    "ScanMatch": {
+      "w/o duration": null,
+      "with duration": null
+    },
+    "VAME": {
+      "SED": null,
+      "STDE": null
+    },
+    "retrieval scanmatch w/ duration": {
+      "pmrr": null,
+      "pr1": null,
+      "pr3": null,
+      "pr5": null
+    }
+  },
+
+  "composites": {
+    "SM": null,
+    "MM": null,
+    "SED": null
+  }
+}

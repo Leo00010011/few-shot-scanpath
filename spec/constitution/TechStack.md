@@ -679,10 +679,18 @@ Two more COCO_FV-specific contracts, for the same reason:
 3. **New dataset branch layout.** If we create `ISP/<OurDataset>/GazeformerISP/`, mirror the OSIE tree
    exactly — same filenames, same relative paths — so upstream diffs stay readable.
 4. **Paths.** Never hardcode an absolute path. Cluster paths go in the run script / CLI args, not in `.py`.
-5. **Git hygiene.** `.gitignore` excludes `*.pt`, `*.pth`, `*.h5` and `__pycache__/`. Never commit
-   weights, features, stimulus images, or subject-level gaze data — and note that a bridge `--out-dir`
-   contains all three, so it belongs outside the repo or under an ignored path. Add `spec/` artefacts,
-   converters, and run scripts.
+5. **Git hygiene.** `.gitignore` excludes `*.pt`, `*.pth`, `*.h5`, `*.npy`, `*.json` and
+   `__pycache__/`, plus `data/`, `work/` and `logs/`. Never commit weights, features, stimulus images,
+   or subject-level gaze data — and note that a bridge `--out-dir` contains all three, so it belongs
+   outside the repo or under an ignored path. Add `spec/` artefacts, converters, and run scripts.
+
+   > **The `*.json` rule is negated for `spec/`** (`!spec/**/*.json`), added 2026-09-09. As a blanket
+   > rule it silently swallowed `spec/2026-09-08-osie-eval-baseline/paper_reference.json` — the
+   > hand-transcribed published row the generated run record depends on. An ignored file does not
+   > appear as untracked, so nothing flagged it; it was simply absent on the next checkout, and the
+   > aggregator failed on the cluster with a missing `--reference`. When adding a broad ignore, check
+   > it against `git status --ignored` for artefacts that are part of the *record* rather than the
+   > *data*.
 6. **`__pycache__` directories are checked in upstream.** Ignore them; do not "clean up" — the 89
    tracked ones stay tracked (`.gitignore` does not untrack). Do delete any *new* `.pyc` your own runs
    drop into upstream directories: loading `loss.py` or `dataset.py` via `importlib` writes them.

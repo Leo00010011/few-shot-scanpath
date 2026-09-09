@@ -4,6 +4,16 @@
 __pycache__/
 *.npy
 *.json
+# ...but spec/ artefacts ARE the project record and must be committed.
+#
+# The blanket *.json above exists to keep dataset labels and embeddings out of the
+# repo -- a job the data/ and work/ rules below already do by directory. As written
+# it also swallowed spec/2026-09-08-osie-eval-baseline/paper_reference.json, the
+# hand-transcribed published row that the generated run record depends on. It never
+# appeared as untracked, so the file simply was not there on the next checkout: an
+# ignore rule that hides a file you meant to commit fails exactly the way D7 says
+# nothing should. Negated rather than narrowed, so any future spec JSON is safe too.
+!spec/**/*.json
 # Subject-level gaze data and staged dataset artefacts (TechStack 6.5).
 # data/ holds osie_fixations_update_duration.json, the COCO fixation labels and
 # the per-dataset embeddings.npy -- none of it belongs in the repo.
