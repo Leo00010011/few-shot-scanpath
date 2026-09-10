@@ -23,6 +23,10 @@ COUNTER_NAMES = (
     "no_stimulus",
     "duplicate_trial",
     "incomplete_stimulus",
+    "support_stimulus_private",
+    "support_stimulus_shared",
+    "unused_stimulus",
+    "surplus_trial",
     "clamped_coords",
     "zero_duration",
     "over_max_length",
@@ -34,17 +38,25 @@ def _new_counters():
     return {name: 0 for name in COUNTER_NAMES}
 
 
-def _resolve_subjects(available, unseen_subjects):
-    """FR1.1, FR1.2, FR1.4, FR1.5."""
+def _resolve_subjects(available, unseen_subjects, subjects_per_image=3):
+    """FR1.1, FR1.2, FR1.4, FR1.5.
+
+    ``available`` is the participant list restricted to *valid* trials, so the
+    default cohort cannot silently include a participant with nothing to score.
+    (On the EVE bundle every ``test*`` participant is ``valid == False``
+    throughout -- Roadmap F-A -- so the old "every id starting 'test'" default
+    resolved to an empty cohort.)
+    """
     if unseen_subjects is None:
-        unseen_subjects = [s for s in available if str(s).startswith("test")]
+        unseen_subjects = list(available)
     unseen_subjects = sorted(set(str(s) for s in unseen_subjects))
 
-    if len(unseen_subjects) < 2:
+    if len(unseen_subjects) < subjects_per_image:
         raise ValueError(
-            "at least 2 unseen subjects are required (got {}: {}); the evaluator's "
-            "(subject x subject) matrix and the retrieval block are meaningless "
-            "below 2".format(len(unseen_subjects), unseen_subjects))
+            "at least subjects_per_image = {} subjects are required (got {}: {}); "
+            "each scored image must contribute exactly that many records or the "
+            "evaluator's bare np.mean() folds -1 sentinels into every metric"
+            .format(subjects_per_image, len(unseen_subjects), unseen_subjects))
 
     available_sorted = sorted(set(str(s) for s in available))
     for sid in unseen_subjects:
@@ -76,7 +88,8 @@ def _convert_scanpath(sp, origin_size, counters):
 
 
 def build_fixations(bundle, unseen_subjects=None, support_pool_size=20,
-                    seed=0, origin_size=(1080, 1920), max_length=16):
+                    seed=0, origin_size=(1080, 1920), max_length=16,
+                    subjects_per_image=3):
     """Build the canonical fixation records for the selected EVE participants.
 
     Returns ``(fixations, exp_keys_aligned, subject_id_map, counters)``.
@@ -84,7 +97,9 @@ def build_fixations(bundle, unseen_subjects=None, support_pool_size=20,
     df = bundle.samples_df
     counters = _new_counters()
 
-    subjects = _resolve_subjects(df["subject"].tolist(), unseen_subjects)
+    valid_subjects = sorted(set(
+        str(x) for x in df[df["valid"].astype(bool)]["subject"].tolist()))
+    subjects = _resolve_subjects(valid_subjects, unseen_subjects, subjects_per_image)
     to_dense = {sid: i for i, sid in enumerate(subjects)}
     subject_id_map = {
         "to_dense": to_dense,
@@ -120,54 +135,136 @@ def build_fixations(bundle, unseen_subjects=None, support_pool_size=20,
         X, Y, T = _convert_scanpath(sp, origin_size, counters)
         slot[dense] = {"exp_key": exp_key, "X": X, "Y": Y, "T": T}
 
-    # FR2.3 — equal-subject invariant.
-    complete = [s for s, d in per_stimulus.items() if len(d) == n_subjects]
-    counters["incomplete_stimulus"] = len(per_stimulus) - len(complete)
+    # --- FR2.3 (revised 2026-09-10) — every SCORED image contributes exactly
+    # ``subjects_per_image`` records; the subject IDENTITIES may differ per image.
+    #
+    # What the frozen evaluator requires is a uniform COUNT, not a common cohort.
+    # ``comprehensive_evaluation_by_subject`` loops
+    # ``for row_idx in range(len(predict_fix_vector))`` — the actual per-image
+    # list length — and its diagonal is positional, so position i is the same
+    # participant in the prediction and the ground truth whichever participant
+    # that is. The collectors are merely ALLOCATED ``(n_images, subject_num, …)``
+    # and reduced with a bare ``np.mean()`` carrying no ``!= -1`` filter on this
+    # branch, so an image contributing fewer than ``subject_num`` records folds
+    # -1 sentinels into every metric. That arithmetic — not any metric — is what
+    # forces the uniform count.
+    #
+    # ``args.subject_num`` does NOT size the model's embedding table:
+    # ``gazeformer.py`` line 100 (``nn.Embedding(subject_num, …)``) is commented
+    # out and ``self.subject_embed`` is whatever tensor ``--user_emb_path``
+    # holds, indexed by the record's dense subject id. So a cohort of many
+    # participants can be scored with ``subject_num = 3``.
+    K = subjects_per_image
+    eligible = sorted(s for s, d in per_stimulus.items() if len(d) >= K)
+    private = {}
+    for dense in range(n_subjects):
+        cands = sorted(s for s in per_stimulus
+                       if len(per_stimulus[s]) < K and dense in per_stimulus[s])
+        random.Random("{}-{}".format(seed, dense)).shuffle(cands)
+        private[dense] = cands
+    counters["incomplete_stimulus"] = len(per_stimulus) - len(eligible)
 
     # FR2.5 — the feature path is built by a literal str.replace('jpg', 'pth').
-    for name in sorted(complete):
+    for name in sorted(per_stimulus):
         if "jpg" in name:
             raise ValueError(
                 "stimulus_name {!r} contains the substring 'jpg'; the feature path is "
                 "built by a literal str.replace('jpg', 'pth') (TechStack 3.2)".format(name))
 
-    # FR2.4
-    if len(complete) < support_pool_size + 1:
+    if not eligible:
         raise ValueError(
-            "only {} stimuli survive filtering, which is fewer than "
-            "support_pool_size + 1 = {}".format(len(complete), support_pool_size + 1))
+            "no stimulus was seen by {} of the {} selected subjects, so the query "
+            "split would be empty".format(K, n_subjects))
 
-    # FR3.1 — deterministic partition.
-    names = sorted(complete)
-    random.Random(seed).shuffle(names)
-    train_names = set(names[:support_pool_size])
-    test_names = set(names[support_pool_size:])
+    # FR3.1 — support prefers stimuli that can never be scored anyway (seen by
+    # fewer than K subjects). A query-eligible stimulus is diverted ONLY when some
+    # subject would otherwise have no support at all, because diverting costs a
+    # scored image for every subject (FR3.3 disjointness is by NAME).
+    #
+    # The pools are deliberately NOT trimmed to a common size: each subject's
+    # embedding is built from its own num_fewshot scanpaths, so only the MINIMUM
+    # matters, and levelling everyone down to the thinnest subject would discard
+    # support the other subjects already have (median 24 vs min 9 on EVE) while
+    # buying nothing.
+    thinnest = min(len(private[d]) for d in range(n_subjects))
+    need = support_pool_size if thinnest == 0 else 0
+
+    # FR2.4
+    if len(eligible) < need + 1:
+        raise ValueError(
+            "only {} stimuli were seen by {} subjects, which is fewer than "
+            "support_pool_size + 1 = {}".format(len(eligible), K, support_pool_size + 1))
+
+    eligible_pool = list(eligible)
+    random.Random(seed).shuffle(eligible_pool)
+    diverted = set(eligible_pool[:need])
+
+    support_by_subject = {}
+    for dense in range(n_subjects):
+        picked = set(private[dense][:support_pool_size])
+        if len(picked) < support_pool_size:
+            for name in sorted(diverted):
+                if len(picked) >= support_pool_size:
+                    break
+                if dense in per_stimulus[name]:
+                    picked.add(name)
+        support_by_subject[dense] = picked
+
+    private_used = set()
+    for names in support_by_subject.values():
+        private_used |= {s for s in names if s not in diverted}
+    counters["support_stimulus_private"] = len(private_used)
+    counters["support_stimulus_shared"] = len(diverted)
+    counters["unused_stimulus"] = (
+        len(per_stimulus) - len(eligible) - len(private_used))
+
+    # Query split: exactly K subjects per image, chosen deterministically. A
+    # surplus trial on an image seen by more than K subjects is DROPPED rather
+    # than routed to support -- FR3.3 disjointness is by stimulus NAME, and a
+    # name in both splits would break it.
+    query = {}
+    for name in sorted(set(eligible) - diverted):
+        chosen = sorted(per_stimulus[name])
+        random.Random("{}-query-{}".format(seed, name)).shuffle(chosen)
+        query[name] = sorted(chosen[:K])
+        counters["surplus_trial"] += len(per_stimulus[name]) - K
+
+    train_names = set(diverted) | private_used
+    test_names = set(query)
     assert not (train_names & test_names), (
         "support and query pools overlap: {}".format(sorted(train_names & test_names)))
 
     fixations = []
     exp_keys_aligned = []
-    for stimulus_name in sorted(complete):
-        split = "train" if stimulus_name in train_names else "test"
-        for dense in range(n_subjects):
-            draft = per_stimulus[stimulus_name][dense]
-            length = len(draft["X"])
-            if length > max_length:
-                counters["over_max_length"] += 1
-            if length < 3:
-                counters["short_scanpath"] += 1
-            fixations.append({
-                "name": "{}.jpg".format(stimulus_name),
-                "subject": int(dense),
-                "X": draft["X"],
-                "Y": draft["Y"],
-                "T": draft["T"],
-                "length": int(length),
-                "split": split,
-                "condition": CONDITION,
-                "task": TASK,
-            })
-            exp_keys_aligned.append(draft["exp_key"])
+
+    def emit(stimulus_name, dense, split):
+        draft = per_stimulus[stimulus_name][dense]
+        length = len(draft["X"])
+        if length > max_length:
+            counters["over_max_length"] += 1
+        if length < 3:
+            counters["short_scanpath"] += 1
+        fixations.append({
+            "name": "{}.jpg".format(stimulus_name),
+            "subject": int(dense),
+            "X": draft["X"],
+            "Y": draft["Y"],
+            "T": draft["T"],
+            "length": int(length),
+            "split": split,
+            "condition": CONDITION,
+            "task": TASK,
+        })
+        exp_keys_aligned.append(draft["exp_key"])
+
+    for stimulus_name in sorted(query):
+        for dense in query[stimulus_name]:
+            emit(stimulus_name, dense, "test")
+
+    for stimulus_name in sorted(train_names):
+        for dense in sorted(per_stimulus[stimulus_name]):
+            if stimulus_name in support_by_subject[dense]:
+                emit(stimulus_name, dense, "train")
 
     # FR5.3 — record order is sorted by (name, subject); the loop above already
     # emits that order, but sort explicitly so the contract does not depend on it.

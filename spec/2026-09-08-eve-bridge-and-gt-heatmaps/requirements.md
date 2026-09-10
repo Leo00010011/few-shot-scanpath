@@ -82,8 +82,12 @@ for "which real EVE participant is row 3?":
 **FR1.4** A participant id absent from `samples_df["subject"]` raises `ValueError` naming
 the id and listing the five closest available ids. Never silently skipped.
 
-**FR1.5** `len(unseen_subjects) < 2` raises `ValueError` — the evaluator's (subject × subject)
-matrix and the retrieval block are meaningless below 2.
+**FR1.5** `len(unseen_subjects) < subjects_per_image` raises `ValueError` — an image cannot
+contribute K records from fewer than K participants.
+
+**FR1.6** *(revised 2026-09-10.)* The default cohort is **every participant with at least one valid
+trial**, not every id starting `"test"`. On the EVE bundle all 15 `test*` participants are
+`valid == False` throughout (Roadmap F-A), so the old default resolved to an empty cohort.
 
 ### FR2 — Trial selection and the equal-subject invariant (D7, TechStack §3.1)
 
@@ -94,23 +98,69 @@ matrix and the retrieval block are meaningless below 2.
 `get_scanpath(exp_key).shape[1] == 0` (`empty_scanpath`); any non-finite value in the
 x/y/duration rows (`non_finite`); `stimulus_path` empty (`no_stimulus`).
 
-**FR2.3** After drops, only `stimulus_name` values present for **all** N selected subjects
-are kept. Every other stimulus is removed entirely and counted as `incomplete_stimulus`.
-This enforces the loader contract that `__len__` is the number of images and every image
-yields the same number of subjects; a ragged grouping would make the `(subject × subject)`
-score matrix in `evaluation.py` ragged.
+**FR2.3** *(revised twice on 2026-09-10 — the binding rule is a uniform subject **count** on
+the **scored** split, not a common cohort.)*
 
-**FR2.4** If fewer than `support_pool_size + 1` stimuli survive, raise `ValueError` stating
-the surviving count and the requested pool size.
+`comprehensive_evaluation_by_subject()` loops
+`for row_idx in range(len(predict_fix_vector))` — each image's *actual* list length — and its
+diagonal is **positional**, so position *i* is the same participant in the prediction and in the
+ground truth, whoever that participant happens to be. The subject **identities may therefore differ
+from image to image.**
+
+What the evaluator cannot tolerate is a varying *count*. Its collectors are allocated
+`(n_images, subject_num, …)`, initialised to `-1`, and reduced with a bare `np.mean()` that carries
+**no `!= -1` filter on the OSIE branch** (`evaluation.py` L137–152; the COCO_FV branch does filter —
+TechStack §4.2 divergence 3). An image contributing fewer than `subject_num` records therefore folds
+`-1` sentinels into every metric. That arithmetic, not any metric's definition, is the constraint.
+
+Crucially `args.subject_num` does **not** size the model's subject embedding:
+`models/gazeframer.py` L100 (`nn.Embedding(subject_num, …)`) is **commented out**, and
+`self.subject_embed` is whatever tensor `--user_emb_path` holds, indexed by the record's dense
+subject id. A cohort of many participants can thus be scored at `subject_num = 3`.
+
+So, after drops:
+
+- **Query split** — stimuli seen by **≥ K** subjects (`K = subjects_per_image`), each contributing
+  **exactly K** records chosen deterministically. A surplus trial on an image seen by more than K
+  subjects is **dropped** and counted as `surplus_trial`; routing it to support would put one
+  stimulus *name* in both splits and break FR3.3.
+- **Support candidates** — stimuli seen by **< K** subjects. These can never be scored, so using
+  them as support costs the query split nothing. Counted as `incomplete_stimulus` (the name is
+  retained; it now means "cannot be scored", not "discarded").
+
+Only the **retrieval block** (MRR, R@1/3/5) genuinely requires several subjects on one image: it is
+computed by `p2g()` over the ScanMatch-with-duration matrix, the only metric evaluated off-diagonal
+(`evaluation.py` L92, unguarded). MultiMatch, ScanMatch-without-duration, SED and STDE are all
+guarded by `if row_idx == col_idx` and compare a subject only against **itself**.
+
+**FR2.4** Raise `ValueError` if no stimulus was seen by K subjects (the query split would be empty),
+or if the eligible pool cannot both cover the support diversion (FR3.1) and leave at least one
+scored stimulus.
 
 **FR2.5** A `stimulus_name` containing the substring `jpg` anywhere raises `ValueError`
 (TechStack §3.2: the feature path is built by a literal `str.replace('jpg', 'pth')`).
 
 ### FR3 — Support/query partition (OPEN-3, disjointness requirement)
 
-**FR3.1** Surviving `stimulus_name`s are sorted ascending, then shuffled with
-`random.Random(seed).shuffle(...)`. The first `support_pool_size` become the **support
-pool**; the remainder become the **query pool**. Default `support_pool_size = 20`.
+**FR3.1** *(revised 2026-09-10.)* The support pool is filled from stimuli that **can never be
+scored** — those seen by fewer than K subjects — and a query-eligible stimulus is diverted into it
+**only when some subject would otherwise have no support at all**, since each diversion costs a
+scored image for every subject.
+
+1. For each subject, its sub-K candidates are sorted ascending and shuffled with
+   `random.Random(f"{seed}-{dense}")`; the subject takes up to `support_pool_size` of them.
+2. If the thinnest subject has **zero** such candidates, `support_pool_size` eligible stimuli are
+   diverted under `random.Random(seed)`, and each short subject tops up from those it saw.
+3. The remaining eligible stimuli form the query pool, each keeping exactly K subjects.
+
+The pools are deliberately **not trimmed to a common size**: each subject's embedding is built from
+its own `num_fewshot` scanpaths, so only the **minimum** matters. Levelling every subject down to the
+thinnest one discards support the others already have (on EVE: median 20 against a minimum of 9) and
+buys nothing.
+
+On a **fully-crossed** dataset no stimulus falls below K, so nobody has a private pool, the deficit
+is the whole pool, and this reduces to the original "first `support_pool_size` names" rule exactly —
+which is what keeps the fully-crossed fixtures meaningful.
 
 **FR3.2** Support-pool trials get `"split": "train"`; query-pool trials get `"split": "test"`.
 No record is emitted with `"split": "validation"`.
@@ -119,8 +169,18 @@ No record is emitted with `"split": "validation"`.
 `set(train_names) & set(test_names) == set()`. A violation raises `AssertionError`.
 
 **FR3.4** `support_pool_size` must be ≥ the `--num_fewshot` the later eval run will use
-(paper default 10). The report records `support_pool_size` so F5 can assert
-`num_fewshot <= support_pool_size`. Rationale: `select_fewshot_subject()` samples
+(paper default 10). The report records `support_pool_size`, `support_per_subject` and
+`min_support_per_subject`; F5 asserts `num_fewshot <= min_support_per_subject` — the
+**minimum**, because with subject-private support pools the subjects no longer share image
+names, so `support_pool_size` alone is not the binding constraint.
+
+**FR3.4a** *(added 2026-09-10, a finding for F3.)* `select_fewshot_subject()` draws
+`num_fewshot` image names from the **union** over the fewshot subjects and then keeps
+whichever subjects have each. With per-subject-disjoint support pools, a single draw of 10
+names therefore gives each subject only ≈ `10 / N` support scanpaths, unequally. To obtain a
+genuine n-shot embedding per subject, **F3 must invoke SE-Net once per subject** (a single
+`--fewshot_subject`, so the draw comes from that subject's own pool) and concatenate the
+resulting rows in dense-id order. This is a call-site decision; no frozen code is involved. Rationale: `select_fewshot_subject()` samples
 `num_fewshot` image names *from the `train` split* under `random_support`; keeping the
 pool larger than `num_fewshot` lets `--random_support` repeats vary the support set while
 FR3.3 keeps every draw disjoint from the scored `test` split.
@@ -268,7 +328,10 @@ first failed invariant, with a message naming the offending record. Checks:
 2. `1.0 <= X <= 1920.0`, `1.0 <= Y <= 1080.0`.
 3. `T` is `int` and `>= 1`.
 4. `subject` ∈ `0..N-1`, and `set(subjects) == set(range(N))`.
-5. Every `name` groups to exactly N records, one per distinct subject (FR2.3).
+5. Every `name` **in the `test` split** groups to exactly N records, one per distinct
+   subject (FR2.3). A `train`-split name may carry 1..N records — the support split is
+   deliberately ragged — but never a duplicate subject. Checked *after* invariant 6, so a
+   split-disjointness violation reports as FR3.3 rather than as a grouping failure.
 6. `split` ∈ `{"train", "test"}`; train-names ∩ test-names = ∅ (FR3.3).
 7. `condition == "freeview"`, `task == "none"`.
 8. Every `name` resolves to a file under `<out_dir>/stimuli/`.
@@ -279,7 +342,8 @@ first failed invariant, with a message naming the offending record. Checks:
     recomputed directly from `(X, Y)` by FR7.1's arithmetic.
 
 **FR9.2** `bridge_report.json` records: the resolved arguments; `origin_size`;
-`support_pool_size`; `num_subjects`; `num_stimuli_train` / `num_stimuli_test`;
+`support_pool_size`; `support_per_subject`; `min_support_per_subject`;
+`num_trials_train` / `num_trials_test`; `num_subjects`; `num_stimuli_train` / `num_stimuli_test`;
 `num_trials`; every drop counter from FR2.2/FR2.3; `clamped_coords`; `zero_duration`;
 `over_max_length`; `short_scanpath`; `stimulus_image_conflict`; and `fixations_sha256`.
 Counters are always present, `0` when nothing fired (D7 — counts are reported, never

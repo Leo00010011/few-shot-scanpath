@@ -27,7 +27,7 @@ def _where(i, rec):
     return "record {} ({}, subject {})".format(i, rec.get("name"), rec.get("subject"))
 
 
-def validate(out_dir, bundle=None, sample_n=32, seed=0):
+def validate(out_dir, bundle=None, sample_n=32, seed=0, subjects_per_image=None):
     """Validate the artefacts under ``out_dir``. Returns ``{check: "ok", ...}``."""
     results = {}
 
@@ -91,20 +91,7 @@ def validate(out_dir, bundle=None, sample_n=32, seed=0):
             sorted(subjects), n_subjects - 1))
     results["dense_subject_ids"] = "ok"
 
-    # --- 5. equal-subject grouping --------------------------------------
-    by_name = {}
-    for i, rec in enumerate(fixations):
-        by_name.setdefault(rec["name"], []).append((i, rec["subject"]))
-    for name, entries in sorted(by_name.items()):
-        if len(entries) != n_subjects:
-            _fail("stimulus {} has {} records, expected {} (FR9.1.5)".format(
-                name, len(entries), n_subjects))
-        if len(set(s for _, s in entries)) != n_subjects:
-            _fail("stimulus {} has duplicate subjects: {} (FR9.1.5)".format(
-                name, sorted(s for _, s in entries)))
-    results["equal_subject_grouping"] = "ok"
-
-    # --- 6. splits -------------------------------------------------------
+    # --- 5. splits -------------------------------------------------------
     train_names, test_names = set(), set()
     for i, rec in enumerate(fixations):
         if rec["split"] == "train":
@@ -118,6 +105,38 @@ def validate(out_dir, bundle=None, sample_n=32, seed=0):
     if overlap:
         _fail("train/test stimulus overlap: {} (FR9.1.6, FR3.3)".format(sorted(overlap)))
     results["split_disjoint"] = "ok"
+
+    # --- 6. uniform subject count on the SCORED split ---------------------
+    # The frozen evaluator allocates its collectors ``(n_images, subject_num, …)``
+    # and reduces them with a bare ``np.mean()`` carrying no ``!= -1`` filter, so
+    # an image contributing fewer than ``subject_num`` records folds -1 sentinels
+    # into every metric. The requirement is therefore a uniform COUNT per scored
+    # image -- the subject IDENTITIES may differ from image to image, since the
+    # evaluator's loops and diagonal are positional. The support split carries no
+    # such contract and is deliberately ragged.
+    by_name = {}
+    for i, rec in enumerate(fixations):
+        by_name.setdefault((rec["split"], rec["name"]), []).append((i, rec["subject"]))
+    for (split, name), entries in sorted(by_name.items()):
+        if len(set(s for _, s in entries)) != len(entries):
+            _fail("stimulus {} ({} split) has duplicate subjects: {} "
+                  "(FR9.1.5)".format(name, split, sorted(s for _, s in entries)))
+    test_counts = {name: len(v) for (split, name), v in by_name.items() if split == "test"}
+    if not test_counts:
+        _fail("no records on the test split; there is nothing to score (FR9.1.5)")
+    distinct = sorted(set(test_counts.values()))
+    if len(distinct) != 1:
+        offenders = {n: c for n, c in sorted(test_counts.items()) if c != distinct[-1]}
+        _fail("scored images do not all carry the same number of subjects: counts {} "
+              "(e.g. {}); the evaluator's bare np.mean() would fold -1 sentinels into "
+              "every metric (FR9.1.5)".format(distinct, dict(list(offenders.items())[:5])))
+    if subjects_per_image is not None and distinct[0] != subjects_per_image:
+        _fail("scored images carry {} subjects each, expected subjects_per_image = {} "
+              "(FR9.1.5)".format(distinct[0], subjects_per_image))
+    if distinct[0] > n_subjects:
+        _fail("scored images carry {} subjects each but the cohort has only {} "
+              "(FR9.1.5)".format(distinct[0], n_subjects))
+    results["uniform_subject_count"] = "ok ({} per scored image)".format(distinct[0])
 
     # --- 7. constants ----------------------------------------------------
     for i, rec in enumerate(fixations):

@@ -10,19 +10,29 @@
 > three-seed band. Close, systematic, unexplained — **recorded as OPEN-7, not chased**: F1's job was to
 > prove the environment, and it did.
 >
-> **No feature is in progress (session closed 2026-09-09).** F6 is the only one that *could* start
-> without a decision; it was deliberately not begun. Everything on the path to our own data — F3, F4,
-> F5, and therefore F7 — is gated on **OPEN-5**, which is undecided and is now the project's single
-> blocking question. Read §5 before picking anything up.
+> **F2 CLOSED 2026-09-10 — OPEN-5 resolved, artefacts built for a 38-participant cohort.**
+> **38 participants · 354 scored images · 1062 scored cells · `--subject_num 3` · `num_fewshot 10`.**
+> All validator invariants pass; every reported number is re-derivable from `bridge_report.json`.
 >
+> **OPEN-5's premise was wrong, and the error was ours.** The claim "the bundle caps us at 2
+> subjects" came from applying the equal-subject rule to the whole run. What `evaluation.py`
+> actually requires is a uniform subject **count per scored image** — its loops run over each
+> image's *actual* length and its diagonal is **positional**, so subject identities may differ
+> from image to image. The `-1`-initialised collectors reduced by a bare `np.mean()` with no
+> `!= -1` filter are what force the uniform count; no metric requires a common cohort. And
+> `args.subject_num` does **not** size the embedding table (`gazeformer.py` L100 is commented
+> out), so a large cohort scores fine at `subject_num = 3`. EVE caps subjects **per image** at
+> 2–4, not the cohort. See §5 OPEN-5 and the spec's `notes.md` §6.
+>
+> **F3, F4 and F5 are unblocked** (F4 still needs OPEN-6, now at 925 conflicts). F6 remains
+> startable at any time.
+
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
 > not reproducible by anyone outside the challenge and cannot serve as the project's environment proof.
 > See §4 — COCO-FreeView is back out of scope, permanently and with a reason attached.
 >
-> **Also live: OPEN-5.** F2's bridge is built and passing its own tests, but running it against
-> the real EVE bundle showed the bundle cannot supply the subject/stimulus structure the ISP
-> loader requires. F3, F4 and F5 are blocked on that until OPEN-5 is resolved — see §5.
+> **~~Also live: OPEN-5.~~** Resolved 2026-09-10 — see §5.
 
 ---
 
@@ -32,10 +42,10 @@
 |---|---|---|---|
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
 | F1 | Reproduce the **OSIE** eval baseline on the cluster | ✓ **DONE** (2026-09-09) — accepted, gap flagged as **OPEN-7** | — |
-| F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ◐ BUILT (2026-09-08), blocked on data | **OPEN-5** |
-| F3 | Subject embeddings for our subjects | ⏸ TODO | F2, **OPEN-2**, **OPEN-5** |
-| F4 | Feature extraction for our stimuli | ⏸ TODO | F2, **OPEN-5**, **OPEN-6** |
-| F5 | Our-dataset eval branch + run script | ⏸ TODO | F2, F3, F4, **OPEN-5** |
+| F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ✓ **DONE** (2026-09-10) — 38 subjects, 1062 scored cells | — |
+| F3 | Subject embeddings for our subjects | ▶ **NEXT** | **OPEN-2** |
+| F4 | Feature extraction for our stimuli | ⏸ TODO | **OPEN-6** |
+| F5 | Our-dataset eval branch + run script | ⏸ TODO | F3, F4 |
 | F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — the only unblocked feature; F1 produced its fixture | — |
 | F7 | Results write-up + validity statement | ⏸ TODO | F5, F6 |
 
@@ -56,7 +66,7 @@ Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸
    OPEN-1 ─► F2 data bridge ✓      F6 offline re-scorer
              │                         │
              ▼                         │
-        OPEN-5 (blocking) ◄── the bundle cannot feed the loader as-is
+        OPEN-5 ✓ resolved: 3 subjects/image, 38-participant cohort
              │                         │
       ┌──────┴────────┐                │
       ▼               ▼                │
@@ -272,7 +282,7 @@ printed twice. Frozen under D1 — documented, not fixed. [TechStack.md](TechSta
 
 ---
 
-### F2 — Dataset bridge: EVE → `fixations.json` + GT heatmaps ◐ BUILT, BLOCKED ON DATA
+### F2 — Dataset bridge: EVE → `fixations.json` + GT heatmaps ✓ DONE (2026-09-10)
 
 Spec: [`spec/2026-09-08-eve-bridge-and-gt-heatmaps/`](../2026-09-08-eve-bridge-and-gt-heatmaps/)
 (requirements · plan · validation · **notes** — the notes file carries the findings below in full).
@@ -295,23 +305,71 @@ Implements Stage A; satisfies D2, D3, D4, D7.
       EVE ships no saliency maps, so the ground truth is derived from the scanpath exactly as
       `OSIE.__getitem__` does, pinned bitwise by a parity test.
 - [x] 74/74 pytest tests pass on Windows CPU; frozen files verified untouched (D1).
-- [ ] **Blocked: OPEN-5.** The bridge runs, but the bundle cannot supply ≥3 subjects sharing
-      ≥21 stimuli, so no scientifically usable configuration exists yet.
-- [ ] Re-run the bitwise-parity test under the `isp` env's numpy 1.23.5 before F5 trusts the
-      heatmap cache (it was validated on the dev machine's numpy 2.1.2 — TechStack §1).
+- [x] **The scored split needs a uniform subject COUNT, not a common cohort** *(corrected
+      2026-09-10, twice)*. First: the equal-subject rule was being applied to the support split,
+      which needs nothing of the sort — `test.py` never builds a train-split loader and SE-Net's
+      `select_fewshot_subject()` keeps whichever subjects have each drawn image. Second, and the
+      bigger error: it does not require a common cohort on the *scored* split either.
+      `comprehensive_evaluation_by_subject()` loops over each image's **actual** list length and its
+      diagonal is **positional**, so subject identities may differ per image. The real constraint is
+      that its `-1`-initialised collectors are reduced by a bare `np.mean()` with **no `!= -1`
+      filter** on this branch, so a short image folds `-1` into every metric. And
+      `args.subject_num` does **not** size the embedding table — `gazeformer.py` L100
+      (`nn.Embedding(subject_num, …)`) is **commented out**.
+- [x] **Only the retrieval block needs a shared stimulus.** ScanMatch-with-duration is the sole
+      metric computed off-diagonal (unguarded, `evaluation.py` L92) and its off-diagonal cells feed
+      `p2g()` alone; its reported value is the diagonal slice. MultiMatch, ScanMatch-w/o-duration,
+      SED and STDE are each guarded by `if row_idx == col_idx`.
+- [x] **OPEN-5 resolved** (§5): **3 subjects per image**, cohort of **38 participants**, retrieval
+      **computed and reported separately** from the paper-comparable block.
+- [x] **Real run, 2026-09-10.** `--subjects-per-image 3 --support-pool-size 20 --seed 0` over 38
+      ids (`train23` excluded) → **354 scored images · 1062 scored cells · 523 support stimuli ·
+      1804 trials** (742 train / 1062 test), `min_support_per_subject = 10` (median 20), **zero
+      diversions**. All validator invariants pass including `uniform_subject_count: ok (3 per
+      scored image)` and the bundle cross-check; `fixations.json` byte-identical on re-run
+      (FR11.4); `fixations_sha256 = 46c6926f6075f4c7…`; 877 stimulus images exported. Artefacts in
+      the git-ignored `data/eve_bridge/` (convention 5).
+- [x] **`train23` excluded from the cohort, deliberately.** It is the only participant with fewer
+      than 10 never-scoreable stimuli (9), which would have capped the run at 9-shot. Dropping it
+      costs 6 images / 18 cells (1.7 %) and buys `num_fewshot = 10` — the paper's n = 10 row.
+- [x] 78/78 pytest tests pass on Windows CPU; frozen files verified untouched (D1).
+- [ ] **Still outstanding — re-run the bitwise-parity test under the `isp` env's numpy 1.23.5**
+      before F5 trusts the heatmap cache. Validated here on numpy 2.1.2 (TechStack §1); Python 3.12
+      is the only interpreter on the dev machine, so this needs the cluster. **F5's precondition**,
+      not F2's.
 
-**Done when:** OPEN-5 is resolved and a real run produces a `fixations.json` +
-`gt_heatmaps.h5` for a subject/stimulus configuration F5 can actually score.
+**Done — 2026-09-10.** A real run produced `fixations.json` + `gt_heatmaps.h5` +
+`subject_id_map.json` + 877 stimulus `.jpg`s + `bridge_report.json` for a cohort F5 can score.
+
+**D7 counters that are not zero and must reach F7:** `short_scanpath = 25` (padded to length 3
+inside the frozen evaluator), `clamped_coords = 5`, `surplus_trial = 73` (the 4th subject dropped
+from images seen by 4 — routing it to support would put one name in both splits),
+`stimulus_image_conflict = 925` (OPEN-6).
+
+**Two live traps for F5:**
+- **The `i_batch > 100` cap is now live.** 354 scored images at `--batch 1` is 354 batches; the run
+  would silently stop at 101 images — 29 % of the test set. Remove or parameterise it.
+- **R@3 is structurally saturated at `subject_num = 3`** (every rank lies in `{0,1,2}`). Report
+  R@1 and MRR; R@3 = 100 % carries no information.
 
 ---
 
-### F3 — Subject embeddings for our subjects ⏸
+### F3 — Subject embeddings for our subjects ▶ NEXT
 
-Depends on **OPEN-2** and **OPEN-5**. Implements Stage C.
+Depends on **OPEN-2** only (OPEN-5 resolved 2026-09-10). Implements Stage C. F2 produced a support
+pool of **10–20 never-scoreable stimuli per subject** (`min_support_per_subject = 10`, median 20),
+disjoint by stimulus from the scored split, so the paper's `num_fewshot = 10` fits exactly. The
+embedding tensor needs **38 rows**, in dense-id order per `subject_id_map.json`.
 
-- [ ] Resolve OPEN-5 — until the query cohort is bigger than 2 participants there is nothing worth
-      embedding.
 - [ ] Resolve OPEN-2 (whose subject embeddings do our subjects get?).
+- [ ] **Run SE-Net once per subject, not once for the cohort** *(new 2026-09-10)*.
+      `select_fewshot_subject()` draws `num_fewshot` image names from the **union** over the
+      fewshot subjects and keeps whichever subjects have each. Our support pools are
+      per-subject **disjoint**, so a single draw of 10 names would hand each subject only ≈ 10/N
+      scanpaths, unequally. Invoke it with one `--fewshot_subject` at a time so the draw comes
+      from that subject's own pool, then concatenate the rows in dense-id order. Call-site only;
+      no frozen code involved. Spec: FR3.4a.
+- [ ] Verify the tensor is `(38, 384)` and that row *i* is `subject_id_map.json`'s `to_eve[str(i)]`.
 - [ ] Feed SE-Net the **`train`-split** trials only. F2 guarantees that pool is disjoint by stimulus
       from the scored `test` split, which is what makes the few-shot embedding legitimate; reading a
       `test` record into the support set silently invalidates every cell of the score matrix.
@@ -327,7 +385,8 @@ Depends on **OPEN-2** and **OPEN-5**. Implements Stage C.
 
 ### F4 — Feature extraction for our stimuli ⏸
 
-Depends on **OPEN-5** and **OPEN-6**.
+Depends on **OPEN-6** only (OPEN-5 resolved 2026-09-10). Scope: **877 images** — 354 scored plus
+523 support. OPEN-6 is correspondingly larger: `stimulus_image_conflict = 925`.
 
 - [ ] Resolve OPEN-6 — one `.pth` per `stimulus_name` cannot represent two different renderings of the
       same image, and the bridge reports the conflict rather than choosing for us.
@@ -344,7 +403,9 @@ Depends on **OPEN-5** and **OPEN-6**.
 
 ### F5 — EVE eval branch + run script ⏸
 
-Depends on **OPEN-5**. Implements Stage D+E for our data; satisfies D1, D3, D4, D5, D8.
+Depends on F3 and F4 (OPEN-5 resolved 2026-09-10). Implements Stage D+E for our data; satisfies
+D1, D3, D4, D5, D8. Cohort: `--subject_num 3`, **354 scored stimuli / 1062 cells**, 38 participants,
+`--num_fewshot 10`. Retrieval **computed and reported separately** from the paper-comparable block.
 
 - [ ] Create `ISP/EVE/GazeformerISP/` mirroring the OSIE tree, with `utils/evaluation.py` and
       `utils/evaltools/*` **copied verbatim** (D1). The branch consumes the bridge's *artefacts*, not
@@ -354,7 +415,17 @@ Depends on **OPEN-5**. Implements Stage D+E for our data; satisfies D1, D3, D4, 
       (pass `origin_size=(1080, 1920)` explicitly — the default `(600, 800)` would silently mis-scale
       every coordinate — set `--subject_num` to our unseen-subject count, remove or parameterise the
       `i_batch > 100` cap).
-- [ ] Assert `num_fewshot <= support_pool_size` from `bridge_report.json` (OPEN-3).
+- [ ] Assert `num_fewshot <= min_support_per_subject` from `bridge_report.json` (OPEN-3, FR3.4).
+      The **minimum**, not `support_pool_size`: the support pools are per-subject and share no
+      image names, so the thinnest one is the binding constraint.
+- [ ] **Report retrieval separately, and annotate R@3.** At `--subject_num 3` every rank lies in
+      `{0,1,2}`, so **R@3 is structurally saturated at 100 %** and R@5 doubly so; quote **R@1 and
+      MRR**. Keep the block out of the paper-comparable row — the published cohort size differs.
+- [ ] **Remove or parameterise the `i_batch > 100` cap — it is now LIVE.** 354 scored images at
+      `--batch 1` is 354 batches, so the run would silently stop at 101 images (29 % of the test
+      set) and report a plausible, wrong number. This is the single most dangerous item in F5.
+- [ ] **Re-run F2's bitwise-parity test under the `isp` env's numpy 1.23.5** before trusting
+      `gt_heatmaps.h5`; it was validated under numpy 2.1.2 on the dev machine (TechStack §1).
 - [ ] Add the heatmap-metric block: `GtHeatmapStore.get_batch()` → `score_step_heatmaps()` against the
       model's `all_actions_prob`. Report NSS/CC/KLD **separately** from the scanpath metrics and say so:
       they average over valid *timesteps*, not over (image, subject) cells. Not the same denominator.
@@ -395,8 +466,12 @@ artefacts alone, and is the natural test harness for F1/F5 (D5).
       training data and our stimuli/subjects, and given the OPEN-2 decision.
 - [ ] State the **squash** (OPEN-4): our stimuli are distorted 16:9 → 4:3 so the metric parameters stay
       bit-identical to the published configuration. Say which of the two was traded for the other.
-- [ ] State the **cohort** the OPEN-5 decision produced — how many participants, how many stimuli, and
-      whether the retrieval block is reportable at all at that size.
+- [ ] State the **cohort** the OPEN-5 decision produced: 38 participants, 354 scored stimuli, 1062
+      cells, **3 subjects per scored image with identities varying by image** (the evaluator's
+      diagonal is positional, so this is legitimate — say so, since a reader will assume a fixed
+      cohort). Note that R@3/R@5 are structurally saturated at K = 3.
+- [ ] Carry the **`surplus_trial = 73`** count: images seen by 4 participants contribute only 3, the
+      4th trial being dropped to keep the support/query split disjoint by stimulus name.
 - [ ] State **OPEN-7**: our own OSIE reproduction lands ~1 % below the published row on SM, with all
       three headline metrics offset the same way. Any comparison of EVE numbers to the paper inherits
       that offset, so it has to be quoted alongside them rather than left in the roadmap.
@@ -459,10 +534,13 @@ Answered by F2:
 - `support_pool_size = 20`, deliberately larger than the paper's `num_fewshot = 10`, so
   `--random_support` repeats draw *varying* support sets that stay inside the pool. With
   `support_pool_size == num_fewshot` every seed draws the same set and averaging measures nothing.
-  F5 must assert `num_fewshot <= support_pool_size`; the value is in `bridge_report.json`.
+  F5 must assert `num_fewshot <= min_support_per_subject`; both values are in `bridge_report.json`.
+- *(2026-09-10)* The pools are **per-subject** and drawn from stimuli seen by fewer than
+  `subject_num` participants — i.e. stimuli that could never be scored anyway, so they cost the
+  query split nothing. The realised run has `min_support_per_subject = 10`, median 20.
 
-Still open for F5: how many `--random_support` repeats to average over, and — pending OPEN-5 — the
-actual `--subject_num`, which the bundle currently caps at 2.
+Still open for F5: how many `--random_support` repeats to average over. `--subject_num` is settled
+at **3** and `--num_fewshot` at **10** by the OPEN-5 decision.
 
 ### ~~OPEN-4~~ — Stimulus resolution and resize policy ✓ RESOLVED 2026-09-08: **squash**
 EVE is 1920×1080 (16:9), OSIE is 4:3, and the frozen metric configuration is welded to a 512×384
@@ -476,46 +554,63 @@ F5 hits once it passes `origin_size` explicitly. Every metric parameter stays bi
 published configuration; the stimulus distortion is recorded in `bridge_report.json` and is F7's to
 state plainly.
 
-### OPEN-5 — The EVE bundle cannot feed the ISP loader as-is *(blocks F3, F4, F5)* ◀ NEW, BLOCKING
-Raised 2026-09-08 by running the built bridge against `eve_shared/EveDataset/bundle`
-(3096 samples, 54 participants). Two facts, both properties of the bundle rather than of the code —
-the bridge fails loudly and counts the drops exactly as D7 requires:
+### ~~OPEN-5~~ — "The EVE bundle cannot feed the ISP loader as-is" ✓ RESOLVED 2026-09-10 — **the premise was wrong**
+
+**The blocker was ours, not the bundle's.** OPEN-5 asserted that the equal-subject invariant capped
+the run at **2 subjects over 13 stimuli**. That came from requiring one cohort to share every scored
+stimulus. The frozen evaluator requires no such thing:
+
+- `comprehensive_evaluation_by_subject()` loops `for row_idx in range(len(predict_fix_vector))` —
+  each image's **actual** list length — and its diagonal is **positional**, so position *i* is the
+  same participant on both sides whoever that is. **Identities may differ from image to image.**
+- The real constraint is arithmetic: the collectors are allocated `(n_images, subject_num, …)`,
+  initialised to `-1`, and reduced by a bare `np.mean()` with **no `!= -1` filter** on this branch
+  (`evaluation.py` L137-152). An image contributing fewer than `subject_num` records folds `-1`
+  sentinels into every metric. The requirement is a uniform **count**, not a common cohort.
+- `args.subject_num` does **not** size the model's embedding table: `gazeformer.py` L100
+  (`nn.Embedding(subject_num, ...)`) is **commented out** and `self.subject_embed` is whatever
+  tensor `--user_emb_path` holds, indexed by the record's dense subject id.
+
+**Only the retrieval block genuinely needs several subjects on one image.** ScanMatch-with-duration
+is the only metric computed off-diagonal (L92, unguarded), feeding `p2g()`; MultiMatch,
+ScanMatch-w/o-duration, SED and STDE are each guarded by `if row_idx == col_idx` and compare a
+subject against itself alone.
+
+What EVE caps is subjects **per image**, not the cohort:
+
+| subjects/image | scored images | scored cells | participants |
+|---|---|---|---|
+| 2 | 743 | 1486 | 39 |
+| **3 - chosen** | **360** | **1080** | **39** |
+| 4 | 77 | 308 | 39 |
+
+**Decided:** `subject_num = 3`; cohort of **38** participants (`train23` excluded — its 9
+never-scoreable stimuli would have capped the run at 9-shot, and dropping it costs 6 images to buy
+the paper's `num_fewshot = 10`); realised as **354 scored images / 1062 cells**. Retrieval is
+**computed and reported separately** from the paper-comparable block — no longer degenerate at
+K = 3, but **R@3 is structurally saturated** (every rank lies in `{0,1,2}`), so quote R@1 and MRR.
+
+No frozen code was touched (D1 intact) and no bundle re-export was needed.
+
+**What survives from the original finding.** Raised 2026-09-08 against
+`eve_shared/EveDataset/bundle` (3096 samples, 54 participants):
 
 1. **Every `test*` participant has `valid == False` on every trial** (train 1951/2238 valid,
-   val 185/261, **test 0/597**). The natural query cohort is unusable; query subjects must come from
-   `train*` / `val*`, or the bundle must be re-exported with usable test-split labels.
-2. **Participants see near-disjoint stimulus sets.** The ISP loader requires every image to yield the
-   same number of subjects (TechStack §3.1) or `evaluation.py`'s (subject × subject) matrix goes
-   ragged. Exhaustive search over the 39 participants with any valid trial:
+   val 185/261, **test 0/597**). **This still stands** — the cohort is drawn from `train*` / `val*`.
+2. **Participants see near-disjoint stimulus sets.** The old "max shared stimuli" frontier
+   (2 → 13, 3 → 4, 4 → 2) is **superseded**: it answers the wrong question, since no common cohort
+   is required. The numbers that matter are that **360 stimuli were seen by ≥ 3 participants** and
+   **743 by ≥ 2**. Reopening this for a larger `subject_num` still means re-exporting the bundle —
+   at K = 4 only 77 images qualify.
 
-   | n subjects | max shared stimuli | best group |
-   |---|---|---|
-   | 2 | **13** | `train02`, `train09` |
-   | 3 | 4 | `train06`, `train09`, `train10` |
-   | 4 | 2 | `train06`, `train09`, `train10`, `train37` |
+The superseded frontier is still reproducible by
+`py -m pytest tests/eve_bridge -m bundle --bundle-dir <dir> -s -k feasibility`.
 
-   No stimulus is shared by more than 4 participants anywhere in the bundle. `support_pool_size = 20`
-   needs ≥ 21 shared stimuli. On the best feasible configuration the equal-subject filter discards
-   91 of 104 candidate stimuli.
-
-A 2-subject evaluation makes the retrieval block (MRR, R@1/3/5) degenerate and the personalization
-claim untestable, so this must be decided before F3/F4/F5. The options:
-
-1. **Re-export the bundle** so participants share a common image set — the EVE protocol may have a
-   shared subset this export did not preserve. *(Preferred if it exists: costs no comparability.)*
-2. **Relax the equal-subject invariant**, which means adapting `OSIE_evaluation` and the evaluator's
-   matrix construction — i.e. touching frozen code (D1). Not free, and needs its own justification
-   against comparability to the published numbers.
-3. **Accept 2 subjects**, report only the diagonal metrics and drop the retrieval block. F7 would
-   have to state plainly what that does and does not license.
-
-The frontier table above is reproduced by
-`py -m pytest tests/eve_bridge -m bundle --bundle-dir <dir> -s -k feasibility`, so it can be
-re-derived cheaply after any bundle re-export.
-
-### OPEN-6 — The same `stimulus_name` renders differently per participant *(blocks F4)* ◀ NEW
-Raised 2026-09-08 alongside OPEN-5. On the 13 stimuli shared by the best 2-subject group,
-`stimulus_image_conflict == 13` — i.e. **all** of them. The images are all 1920×1080 RGB and open
+### OPEN-6 — The same `stimulus_name` renders differently per participant *(blocks F4)*
+Raised 2026-09-08 alongside OPEN-5; **rescaled 2026-09-10**. On the realised 38-participant cohort
+`stimulus_image_conflict == 925` across 877 exported stimuli — i.e. essentially **all** of them.
+(The original figure of 13 was measured on the 2-subject cohort and understated the scale, not the
+kind, of the problem.) The images are all 1920×1080 RGB and open
 cleanly, but the two participants' renderings differ substantially: mean absolute difference ≈ 9–29
 per channel, 24–72 % of pixels differing, whole-image correlation ≈ 0.70 on the case inspected.
 Recognisably the same photograph, differently rendered — a brightness/scale/crop difference, not

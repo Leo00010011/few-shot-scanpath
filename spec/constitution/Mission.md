@@ -58,13 +58,20 @@ the resolution of "matches the published numbers", not bitwise ([TechStack.md](T
 those are supplied instead by the three-seed sweep's **across-seed** spread, a different quantity, with
 the per-cell std deferred to F6 (§3.5b).
 
-**P4 — Cohort structure.** *(discovered 2026-09-08, unsolved — Roadmap OPEN-5)*
-The evaluator's square score matrix presupposes that every stimulus was seen by *every* subject in the
-cohort. OSIE satisfies this by construction; EVE does not — participants see near-disjoint image sets,
-so the largest usable cohort in the bundle we hold is **2 subjects over 13 stimuli**. This is not a
-units or indexing problem that a converter can absorb. It bounds what the experiment can be, and it
-has to be decided before any GPU time is spent on our data.
+**P4 — Cohort structure.** *(discovered 2026-09-08; premise corrected and decided 2026-09-10 —
+Roadmap OPEN-5)*
+It was believed that the evaluator's square score matrix presupposes every stimulus being seen by
+*every* subject, which on EVE's near-disjoint image sets would have capped us at 2 subjects. **That
+was our error, not the evaluator's.** `comprehensive_evaluation_by_subject()` iterates each image's
+*actual* subject list and its diagonal is **positional**, so subject identities may differ from
+image to image. The real requirement is a uniform subject **count** per scored image, forced by
+`-1`-initialised collectors reduced with a bare `np.mean()` that has no `!= -1` filter on this
+branch. Only the retrieval block needs several subjects on one image; every diagonal metric compares
+a subject against itself. And `args.subject_num` does not size the subject embedding table.
 
+The realised cohort is therefore **38 participants over 354 scored stimuli — 1062 (image, subject)
+cells at 3 subjects per image** — not 26. F7 must state that the trio differs per image, since a
+reader will otherwise assume a fixed cohort.
 ---
 
 ## 3. Overall pipeline
@@ -129,11 +136,12 @@ reduce to loading a released `*_user_embedding.pt` — but that embedding was le
 subjects, not ours, which is the central open scientific question recorded in
 [Roadmap.md](Roadmap.md).
 
-**The bridge running is not the same as the data being usable.** Stage A currently has no
-scientifically valid configuration on the bundle we hold: the EVE `test*` participants carry no valid
-trials, and participants see near-disjoint stimulus sets, which the ISP loader's equal-subject
-requirement will not tolerate above 2 subjects. That is Roadmap **OPEN-5**, and it blocks Stages C, B
-and D for our data until it is decided.
+**Stage A has run for real (2026-09-10).** `data/eve_bridge/` holds `fixations.json`,
+`gt_heatmaps.h5`, `subject_id_map.json`, 877 stimulus `.jpg`s and `bridge_report.json` for a cohort
+of **38 participants — 354 scored stimuli (1062 cells at 3 subjects per image), 523 support stimuli,
+1804 trials** — all validator invariants passing, including the uniform-subject-count check. The EVE
+`test*` participants carry no valid trials, so the cohort comes from `train*` / `val*`. Stages B, C
+and D are unblocked; F4 still waits on **OPEN-6** (`stimulus_image_conflict = 925`).
 
 ---
 

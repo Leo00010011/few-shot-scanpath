@@ -485,7 +485,31 @@ artefacts, never the bridge's code — the one exception is `score_step_heatmaps
 | `subject_id_map.json` | F5 | `{"to_dense": {"train02": 0, …}, "to_eve": {"0": "train02", …}}`. Dense ids are the index into the *sorted* participant list, so argument order cannot change them. This is the sole authority for D4's "which of my real subjects is row 3?". |
 | `stimuli/<name>.jpg` | F4 | Native 1920×1080, `quality=95, subsampling=0`. One per `stimulus_name`; on a rendering collision the first exp_key in sorted order wins and the conflict is *counted*, not resolved (Roadmap OPEN-6). |
 | `gt_heatmaps.h5` | F5 | Layout below. |
-| `bridge_report.json` | F7 | Resolved args, `origin_size`, `support_pool_size`, subject/stimulus/trial counts, `fixations_sha256`, and every drop counter — always present, `0` when nothing fired (D7). |
+| `bridge_report.json` | F5, F7 | Resolved args, `origin_size`, `support_pool_size`, `support_per_subject`, `min_support_per_subject`, subject/stimulus/trial counts (incl. `num_trials_train` / `num_trials_test`), `fixations_sha256`, and every drop counter — always present, `0` when nothing fired (D7). |
+
+**The `train` and `test` splits carry different contracts** *(corrected 2026-09-10)*. The §3.1
+equal-subject invariant binds the **scored** split only, and even there it demands a uniform
+**count**, not a common cohort: `evaluation.py` iterates each image's *actual* subject list and its
+diagonal is **positional**, so the subject identities may differ from image to image. Every `test`
+name must yield exactly `args.subject_num` records because the collectors are `-1`-initialised and
+reduced by a bare `np.mean()` with no `!= -1` filter on this branch — a short image folds `-1` into
+every metric. `args.subject_num` does **not** size the subject embedding (`gazeformer.py` L100 is
+commented out), so a 38-participant cohort scores correctly at `subject_num = 3`. Only the retrieval
+block needs several subjects per image; MultiMatch, ScanMatch-w/o-duration, SED and STDE are each
+guarded by `if row_idx == col_idx`. The `train` split is deliberately **ragged** — a support stimulus is
+subject-private and carries one record. Nothing enforces otherwise, because
+`ISP/OSIE/GazeformerISP/src/test.py` constructs `OSIE_evaluation(..., type="test")` and
+**never builds a train-split loader at all** (the subject embedding arrives precomputed via
+`--user_emb_path`), and `SE-Net/common/utils.py::select_fewshot_subject()` keeps whichever
+subjects have each drawn image (`if subject in img_name_groups[img_name]`).
+
+Two consequences downstream:
+
+- **F5 asserts `num_fewshot <= min_support_per_subject`**, not `<= support_pool_size`. The
+  pools share no image names, so the thinnest pool binds.
+- **F3 must invoke SE-Net once per subject.** `select_fewshot_subject()` draws `num_fewshot`
+  names from the **union** across the fewshot subjects; with disjoint pools one draw of 10
+  names gives each subject ≈ 10/N scanpaths, unequally.
 
 **`origin_size` is `(1080, 1920)` as `(H, W)`** and is written into both `bridge_report.json` and the
 HDF5 root attrs, precisely so F5 passes it explicitly rather than inheriting the `OSIE_evaluation`

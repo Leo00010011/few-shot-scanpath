@@ -39,6 +39,9 @@ def parse_args(argv=None):
     p.add_argument("--unseen-subjects", nargs="+", default=None,
                    help="EVE participant ids; default is every id starting 'test'")
     p.add_argument("--support-pool-size", type=int, default=20)
+    p.add_argument("--subjects-per-image", type=int, default=3,
+                   help="records per SCORED image = F5's --subject_num; the subject "
+                        "identities may differ per image, only the count is fixed")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--skip-stimuli", action="store_true")
     p.add_argument("--skip-heatmaps", action="store_true")
@@ -56,6 +59,7 @@ def run(args, bundle=None):
         bundle,
         unseen_subjects=args.unseen_subjects,
         support_pool_size=args.support_pool_size,
+        subjects_per_image=args.subjects_per_image,
         seed=args.seed,
         origin_size=ORIGIN_SIZE,
         max_length=MAX_LENGTH,
@@ -86,12 +90,22 @@ def run(args, bundle=None):
     train_names = sorted({r["name"] for r in fixations if r["split"] == "train"})
     test_names = sorted({r["name"] for r in fixations if r["split"] == "test"})
 
+    # The support pool is per-subject: with subject-private stimuli the pools do
+    # not share image names, so F3/F5 must assert num_fewshot against the
+    # MINIMUM, not against support_pool_size alone (FR3.4).
+    support_per_subject = {}
+    for rec in fixations:
+        if rec["split"] == "train":
+            support_per_subject.setdefault(str(rec["subject"]), set()).add(rec["name"])
+    support_per_subject = {k: len(v) for k, v in sorted(support_per_subject.items())}
+
     report = {
         "args": {
             "bundle_dir": args.bundle_dir,
             "out_dir": args.out_dir,
             "unseen_subjects": args.unseen_subjects,
             "support_pool_size": args.support_pool_size,
+            "subjects_per_image": args.subjects_per_image,
             "seed": args.seed,
             "skip_stimuli": args.skip_stimuli,
             "skip_heatmaps": args.skip_heatmaps,
@@ -100,10 +114,15 @@ def run(args, bundle=None):
         "action_map": list(ACTION_MAP),
         "max_length": MAX_LENGTH,
         "support_pool_size": args.support_pool_size,
+        "subjects_per_image": args.subjects_per_image,
+        "support_per_subject": support_per_subject,
+        "min_support_per_subject": min(support_per_subject.values()) if support_per_subject else 0,
         "num_subjects": len(subject_id_map["to_dense"]),
         "num_stimuli_train": len(train_names),
         "num_stimuli_test": len(test_names),
         "num_trials": len(fixations),
+        "num_trials_train": sum(1 for r in fixations if r["split"] == "train"),
+        "num_trials_test": sum(1 for r in fixations if r["split"] == "test"),
         "counters": counters,
         "fixations_sha256": fixations_sha256,
         "heatmap_metric_denominator": (
@@ -117,7 +136,8 @@ def run(args, bundle=None):
             "evaluator pads them with (1., 1., 1e-3) before MultiMatch, which "
             "changes what the reported mean means.\n".format(counters["short_scanpath"]))
 
-    report["validation"] = validate(args.out_dir, bundle=bundle)
+    report["validation"] = validate(args.out_dir, bundle=bundle,
+                                    subjects_per_image=args.subjects_per_image)
 
     with open(os.path.join(args.out_dir, "bridge_report.json"), "w") as fh:
         json.dump(report, fh, indent=4)
@@ -129,7 +149,13 @@ def _print_summary(report):
     print("subjects        : {}".format(report["num_subjects"]))
     print("stimuli (train) : {}".format(report["num_stimuli_train"]))
     print("stimuli (test)  : {}".format(report["num_stimuli_test"]))
-    print("trials          : {}".format(report["num_trials"]))
+    print("trials          : {} ({} train / {} test)".format(
+        report["num_trials"], report["num_trials_train"], report["num_trials_test"]))
+    print("support/subject : {} (min {})".format(
+        report["support_per_subject"], report["min_support_per_subject"]))
+    print("scored cells    : {} images x {} subjects/image = {}".format(
+        report["num_stimuli_test"], report["subjects_per_image"],
+        report["num_stimuli_test"] * report["subjects_per_image"]))
     print("origin_size     : {} (H, W)".format(tuple(report["origin_size"])))
     nonzero = {k: v for k, v in report["counters"].items() if v}
     if nonzero:
