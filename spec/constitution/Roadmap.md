@@ -3,11 +3,17 @@
 > Constitution file 3 of 3. Read together with [Mission.md](Mission.md) and [TechStack.md](TechStack.md).
 > Last updated: 2026-09-09
 >
-> **Current phase: F1 — Reproduce the OSIE baseline. SWEEP COMPLETE 2026-09-09.** The pipeline ran
-> end to end on the cluster and all three seeds (`0 1 2`) are computed, with per-seed artefacts
-> preserved. Seed 0's metrics were checked against the paper's OSIE row by hand and are close. What is
-> left is **generating the run record** (`aggregate_seeds.py --report`) and transcribing the paper's
-> row into `paper_reference.json` — not the plumbing, and no longer the sweep. **F6 is unblocked.**
+> **F1 CLOSED 2026-09-09 — accepted with a flagged gap (OPEN-7).** The pipeline ran end to end, all
+> three seeds are computed, and the run record is generated from artefacts: SM **0.3704 ± 0.0041**,
+> MM **0.8010 ± 0.0019**, SED **7.3438 ± 0.0381**. Against the paper's n=10 ISP-SENet row
+> (0.375 / 0.803 / 7.318) all three land slightly on the **worse** side, SM and MM just outside the
+> three-seed band. Close, systematic, unexplained — **recorded as OPEN-7, not chased**: F1's job was to
+> prove the environment, and it did.
+>
+> **No feature is in progress (session closed 2026-09-09).** F6 is the only one that *could* start
+> without a decision; it was deliberately not begun. Everything on the path to our own data — F3, F4,
+> F5, and therefore F7 — is gated on **OPEN-5**, which is undecided and is now the project's single
+> blocking question. Read §5 before picking anything up.
 >
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
@@ -25,12 +31,12 @@
 | ID | Feature | Status | Blocked by |
 |---|---|---|---|
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
-| F1 | Reproduce the **OSIE** eval baseline on the cluster | ◐ SWEEP COMPLETE (2026-09-09, seeds 0/1/2); generated run record + paper reference outstanding | — |
+| F1 | Reproduce the **OSIE** eval baseline on the cluster | ✓ **DONE** (2026-09-09) — accepted, gap flagged as **OPEN-7** | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ◐ BUILT (2026-09-08), blocked on data | **OPEN-5** |
 | F3 | Subject embeddings for our subjects | ⏸ TODO | F2, **OPEN-2**, **OPEN-5** |
 | F4 | Feature extraction for our stimuli | ⏸ TODO | F2, **OPEN-5**, **OPEN-6** |
 | F5 | Our-dataset eval branch + run script | ⏸ TODO | F2, F3, F4, **OPEN-5** |
-| F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **UNBLOCKED** (2026-09-09) — F1 produced its fixture | — |
+| F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — the only unblocked feature; F1 produced its fixture | — |
 | F7 | Results write-up + validity statement | ⏸ TODO | F5, F6 |
 
 Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸ TODO · ✗ DROPPED
@@ -69,7 +75,7 @@ OPEN-6└───────┬───────┘                │
 
 ## 3. Features
 
-### F1 — Reproduce the OSIE eval baseline on the cluster ◐ SWEEP COMPLETE
+### F1 — Reproduce the OSIE eval baseline on the cluster ✓ DONE (accepted; gap flagged as OPEN-7)
 
 Spec: [`spec/2026-09-08-osie-eval-baseline/`](../2026-09-08-osie-eval-baseline/)
 (requirements · plan · validation). Satisfies D1, D5, D6, D7, D8.
@@ -160,10 +166,63 @@ Cluster run, 2026-09-09:
       - `--seed` is properly wired — `test.py` seeds numpy, torch and CUDA and pins
         `cudnn.deterministic=True` / `benchmark=False`, so the three runs draw genuinely different
         samples and each is individually reproducible (D5).
-- [ ] Run `aggregate_seeds.py` over the three seed directories and commit the generated
-      `run_record.md` + `metrics_sweep.json` (command in [TechStack.md](TechStack.md) §1). **The
-      three-seed band is not yet recorded anywhere in the repo** — seed 0's numbers above are a point,
-      not the band F1's "done when" asks for.
+- [x] **Run record generated 2026-09-09** — `aggregate_seeds.py` pooled all three seeds with every
+      guard passing silently: identical resolved stacks, identical preflight fingerprints, identical
+      invariant args, each directory's seed matching its logged `seed`, and each seed's printed
+      headline matching the composites re-derived from its own log. The three runs are replicates.
+
+      | headline | mean ± across-seed std | min | max |
+      |---|---|---|---|
+      | SM | **0.3704 ± 0.0041** | 0.3664 | 0.3746 |
+      | MM | **0.8010 ± 0.0019** | 0.7992 | 0.8029 |
+      | SED | **7.3438 ± 0.0381** | 7.3000 | 7.3686 |
+
+      Three things the numbers themselves raise, all of which belong in F7:
+      - **Seed 0 is the top of the SM range**, not the centre: its `0.3746` is the sweep `max` against
+        a mean of `0.3704`. The favourable hand-comparison against the paper was made on the single
+        most optimistic seed. Compare the **mean** to the published row, not seed 0.
+      - **`pr1` (R@1) is by far the noisiest metric**: `20.4762 ± 1.4094`, ranging 18.86–21.43 — a ~7 %
+        relative spread, an order of magnitude worse than any other. Any claim about R@1 needs the band
+        attached; a single-seed R@1 means very little at this cohort size.
+      - **`n_short = 0` and `oob = 0`** on the scored split. No scanpath was padded to length 3 and no
+        coordinate was out of frame, so both of those contamination routes (TechStack §4, D7) are
+        confirmed absent for F1 rather than merely assumed.
+- [x] **Published row transcribed 2026-09-09** into `paper_reference.json` — the paper's OSIE block
+      carries exactly SM / MM / SED, so only those three have a published counterpart; every
+      per-dimension MultiMatch value, both ScanMatch variants, STDE and the whole retrieval block are
+      left `null` and render as `--` = UNKNOWN. The comparable row is **n = 10, ISP-SENet**, matching
+      this run's `--num_fewshot 10` and `fewshot_user_embedding_10.pt`; the n = 1 and n = 5 rows are
+      different configurations and must not be compared against.
+
+      | | ours (3-seed mean) | ± seed | paper (n=10) | delta | within seed spread |
+      |---|---|---|---|---|---|
+      | SM ↑ | 0.3704 | 0.0041 | **0.375** | −0.0046 | **no** |
+      | MM ↑ | 0.8010 | 0.0019 | **0.803** | −0.0020 | **no** |
+      | SED ↓ | 7.3438 | 0.0381 | **7.318** | +0.0258 | yes |
+
+      **The reproduction is close but not clean, and the shortfall is systematic rather than noise.**
+      All three metrics land on the *worse* side of the published value — SM and MM lower, SED higher
+      — and for SM and MM the paper's number sits just outside the full three-seed range
+      (`0.375 > max 0.3746`; `0.803 > max 0.8029`). Three independent metrics offset the same way is
+      the signature of a small systematic difference, not sampling scatter. In relative terms it is
+      ≈ 1.2 % on SM, 0.25 % on MM, 0.35 % on SED.
+
+      **Ruled out:** `--eval_repeat_num > 1` cannot be the explanation — it **raises IndexError** on
+      this path, because `evaluation.py`'s collectors are shaped `(n_images, subject_num)` while
+      `test.py` would hand it `eval_repeat_num * subject_num` rows ([TechStack.md](TechStack.md) §5).
+      Do not spend GPU time on it. `--random_support` is likewise inert here: `select_fewshot_subject()`
+      returns early when `split != 'train'`, so the query-set score does not depend on it.
+
+      **Outstanding chore (not blocking):** `run_record.md` was generated *before* the reference was
+      filled in, so its comparison section still shows `--` throughout. Re-run `aggregate_seeds.py`
+      with `--reference` on the cluster to populate it. The numbers above are already correct; only
+      the generated file lags.
+
+      **Still open, for F7:** whether the residual comes from the env drift on the float metric paths
+      (numpy 2.1.2 vs the pinned 1.24.3 — MultiMatch and STDE are exactly where §1.1 predicts drift
+      would show), from the released checkpoint differing from the one behind the table, or from the
+      paper's own number being an average over something not reproduced here. **This is a question to
+      state honestly in the write-up, not to resolve by tuning.**
 - [ ] Transcribe the paper's OSIE row into
       [`spec/2026-09-08-osie-eval-baseline/paper_reference.json`](../2026-09-08-osie-eval-baseline/paper_reference.json)
       — the template ships with every value `null` and its provenance fields blank. This is the
@@ -188,10 +247,18 @@ still discarded. D6's std is supplied by the sweep's **across-seed** spread, and
 is deferred to F6. These are different quantities and the write-up must not conflate them —
 [TechStack.md](TechStack.md) §3.5b states which is which.
 
-**Done when:** SM / MM / SED land within the three-seed noise band of the published OSIE row, and the
-exact command + env are recorded — in the **generated** `run_record.md`, not by hand. *(Sweep complete
-2026-09-09; the record and the paper reference are pending. Seed 0 compared favourably by hand, but a
-point is not a band and an off-repo check is not an artefact.)*
+**Done when — met, with a documented deviation.** *(Closed 2026-09-09 by decision: F1's purpose is an
+environment proof, and a ≈ 1.2 % shortfall on SM does not undermine it. Chasing further would spend GPU
+time on a question F1 was never meant to answer.)*
+
+F1's actual purpose **is** discharged: the environment, the released checkpoint, the released subject
+embedding, Stage B, the loader and the frozen metric code are known-good **as a system**, so any
+discrepancy F5 produces on EVE data is attributable to the data rather than the setup. The run is
+reproducible from one documented command, and every reported number is re-derivable from artefacts by
+`aggregate_seeds.py` without a GPU (D5).
+
+The literal criterion — all three inside the three-seed band — is **not** met: SED lands inside, SM and
+MM sit just outside on the worse side. That gap is **OPEN-7** (§5). Recorded, not resolved.
 
 **Note on `R@5`:** with `--subject_num 5` every rank lies in `{0..4}`, so `p2g`'s `r5` is identically
 `100.0`. Confirmed on all seeds (`pr5 = 100.0000`). It is still reported (D6 names R@5) but must be
@@ -330,6 +397,9 @@ artefacts alone, and is the natural test harness for F1/F5 (D5).
       bit-identical to the published configuration. Say which of the two was traded for the other.
 - [ ] State the **cohort** the OPEN-5 decision produced — how many participants, how many stimuli, and
       whether the retrieval block is reportable at all at that size.
+- [ ] State **OPEN-7**: our own OSIE reproduction lands ~1 % below the published row on SM, with all
+      three headline metrics offset the same way. Any comparison of EVE numbers to the paper inherits
+      that offset, so it has to be quoted alongside them rather than left in the roadmap.
 - [ ] State that `SED_best` / `STDE_best` are **aliases** of `SED` / `STDE`, not a best-of-N
       (`evaluation.py` aliases them outright). Report `SED` and `STDE` once each; listing the `_best`
       pair alongside them reads as corroboration that does not exist. [TechStack.md](TechStack.md) §4.
@@ -456,6 +526,37 @@ one `.pth` per `stimulus_name`, which cannot represent two renderings — so the
 rendering was discarded gets scored against features of an image they did not see. Decide before F4
 whether to pick one rendering, key features per (stimulus, participant), or treat the divergence as a
 defect in the bundle export.
+
+### OPEN-7 — F1 lands consistently ~1 % below the published OSIE row *(does not block; colours F7)* ◀ NEW
+Raised and **accepted** 2026-09-09 at F1's close. Against the paper's **n = 10, ISP-SENet** row:
+
+| | ours (3-seed mean ± across-seed std) | paper | delta | inside band |
+|---|---|---|---|---|
+| SM ↑ | 0.3704 ± 0.0041 | 0.375 | −0.0046 | no |
+| MM ↑ | 0.8010 ± 0.0019 | 0.803 | −0.0020 | no |
+| SED ↓ | 7.3438 ± 0.0381 | 7.318 | +0.0258 | yes |
+
+All three fall on the **worse** side, and for SM/MM the published value sits outside the full
+three-seed range. Three independent metrics offset in one direction is a small **systematic**
+difference, not scatter.
+
+**Ruled out already — do not re-test:**
+- `--eval_repeat_num > 1` **raises IndexError** on this path ([TechStack.md](TechStack.md) §5):
+  `evaluation.py`'s collectors are `(n_images, subject_num)` but `test.py` would supply
+  `eval_repeat_num * subject_num` rows. R = 1 is structurally forced.
+- `--random_support` is inert for a query-set score — `select_fewshot_subject()` returns early when
+  `split != 'train'`.
+- Padding and coordinate contamination: the sweep's preflight reports `n_short = 0` and `oob = 0`.
+
+**Still candidate:** env drift on the float metric paths (numpy 2.1.2 vs the pinned 1.24.3 — MultiMatch
+and STDE are exactly where [TechStack.md](TechStack.md) §1.1 predicts drift would surface); the
+released checkpoint differing from the one behind the table; or the published figure averaging over
+something not reproduced here.
+
+**Why it does not block.** F1 exists to prove the environment end-to-end, which it did. The residual is
+small, bounded, and measured. It is **F7's to state plainly**, not F5's to fix — and it must not be
+quietly dropped: a reader comparing our EVE numbers to the paper needs to know our own OSIE
+reproduction ran ~1 % low to begin with.
 
 ---
 

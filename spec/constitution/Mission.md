@@ -48,7 +48,9 @@ milliseconds inside ScanMatch; a fixed 16×12 spatial binning tied to a specific
 short scanpaths padded to length 3 before MultiMatch; NaN elimination that silently changes the
 denominator. These must be preserved, not "cleaned up".
 
-The F1 baseline run reproduced the published OSIE row using the authors' unmodified metric code, so the
+The F1 baseline run came within ~1 % of the published OSIE row using the authors' unmodified metric code (see
+Roadmap **OPEN-7** — all three headline metrics land slightly on the worse side, which is recorded and
+not resolved), so the
 contracts above are now known to be honoured by our call sites and not merely believed to be. Two
 caveats ride along: the run used a much newer numpy/torch than the pin list, which is validated only at
 the resolution of "matches the published numbers", not bitwise ([TechStack.md](TechStack.md) §1.1); and

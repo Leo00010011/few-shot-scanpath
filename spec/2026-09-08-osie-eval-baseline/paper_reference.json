@@ -21,10 +21,10 @@
     "for a different shot count or a different subject split is not a comparable number."
   ],
 
-  "source": null,
-  "transcribed_by": null,
-  "transcribed_utc": null,
-  "notes": null,
+  "source": "Xue et al., 'Few-shot Personalized Scanpath Prediction', CVPR 2025 — OSIE block of the n-shot results table, row 'ISP-SENet' at n = 10.",
+  "transcribed_by": "lulloa (screenshot of the paper's table) — read off by Claude Code and confirmed against the run's num_fewshot=10",
+  "transcribed_utc": "2026-09-09",
+  "notes": "ONLY the three composites are transcribed. The OSIE block of that table carries exactly SM / MM / SED, so the per-dimension MultiMatch values, the two ScanMatch variants, STDE and the retrieval block have NO published counterpart there and are deliberately left null — they render as '--' = UNKNOWN, never as agreement. The n = 10 row is the comparable one: this run used --num_fewshot 10 with fewshot_user_embedding_10.pt (the paper's n = 1 and n = 5 rows are different configurations and must not be compared against). SED is lower-is-better; SM and MM are higher-is-better.",
 
   "metrics": {
     "MultiMatch": {
@@ -51,8 +51,8 @@
   },
 
   "composites": {
-    "SM": null,
-    "MM": null,
-    "SED": null
+    "SM": 0.375,
+    "MM": 0.803,
+    "SED": 7.318
   }
 }

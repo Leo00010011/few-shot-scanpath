@@ -77,8 +77,21 @@ several major versions newer than anything above, and it reproduced the publishe
 | torchvision | 0.14.1 | **0.25.0+cu126** | |
 | numpy | 1.24.3 | **2.1.2** | major version jump |
 | scipy | 1.9.3 | **1.14.1** | |
-| scikit-image / opencv | 0.19.3 / 4.9.0.80 | installed to satisfy imports | |
+| scikit-image | 0.19.3 | **0.26.0** | corrected 2026-09-09 — see below |
+| opencv | 4.9.0.80 | **4.11.0** | corrected 2026-09-09 — see below |
 | **multimatch-gaze** | **0.1.3** | **0.1.3** | the one pin that was held |
+
+> **The scikit-image and opencv rows were wrong until 2026-09-09, and the generated run record is what
+> caught it.** They previously read `0.19.3 / 4.9.0.80` — the *pinned* values — in the column labelled
+> "F1's actual run", with the gloss "installed to satisfy imports". The sweep's `versions.txt`, read
+> back by `aggregate_seeds.py`, says **skimage 0.26.0** and **cv2 4.11.0**. The deviation from the pin
+> list is therefore larger than this section claimed. Neither library is on the metric path — the
+> frozen suite imports `skimage` and `cv2` only in `visual_attention_metrics.py`, and the SED/STDE call
+> sites do not reach the functions that use them (see the `scipy.misc.imresize` dead path above) — so
+> nothing about the published-row agreement changes. What changes is the record's honesty. This is the
+> concrete argument for D5 and for generating the record from artefacts rather than transcribing it: a
+> hand-written table asserted versions nobody had checked, and it stayed wrong until a tool read the
+> file.
 
 Why this did not break, established by reading and then by testing the frozen code directly under
 numpy 2.1.2 on the dev machine before the run:
@@ -653,6 +666,14 @@ Two more COCO_FV-specific contracts, for the same reason:
   of dim `args.subject_feature_dim = 384` and a task embedding of dim `args.lm_hidden_dim = 768`.
 - Spatial action map `(args.im_h, args.im_w) = (24, 32)`; `args.action_map_num = 4`;
   `max_length = 16`, `min_length = 1`.
+- **`--eval_repeat_num` is effectively pinned to 1 on the eval path** *(established 2026-09-09)*.
+  `test.py` extends each image's prediction list once per repeat, so `len(predict_fix_vector)` becomes
+  `eval_repeat_num * subject_num`; but `evaluation.py`'s collectors are shaped
+  `(n_images, subject_num)` and `scores_of_each_images` is `(n_images, subject_num, subject_num, 9)`,
+  indexed `[index, row_idx, col_idx]`. Any `eval_repeat_num > 1` therefore drives `row_idx` past
+  `subject_num` and **raises IndexError**. The argument is real but belongs to another path; do not
+  reach for it to explain a discrepancy against the published row, and do not spend GPU time testing
+  it. F1 passes `--eval_repeat_num 1` explicitly.
 - The model emits `all_actions_prob` plus log-normal duration parameters
   (`log_normal_mu`, `log_normal_sigma2`); `models/sampling.py::Sampling` turns these into fixation vectors
   via `random_sample()` → `generate_scanpath()`. Inference is therefore **stochastic** — `--eval_repeat_num`
