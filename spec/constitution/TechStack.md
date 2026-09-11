@@ -1,7 +1,7 @@
 # Tech Stack
 
 > Constitution file 2 of 3. Read together with [Mission.md](Mission.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-09
+> Last updated: 2026-09-10
 
 ---
 
@@ -132,9 +132,66 @@ Practical consequences for F5 and anyone reusing an env:
 - Building `isp` from `ISP/environment.yml` remains unattempted, and on this evidence unnecessary for
   eval-only work.
 
+### 1.2 `SE-Net/environment.yml`'s pip section is unusable — build `senet` from the conda half ◀ 2026-09-11
+
+**An earlier revision of this section said the `senet` file, unlike `ISP/environment.yml`, "is not
+known to be internally inconsistent". That was wrong**, and it was wrong in the way that matters. The
+two files share the same pathology — both are dirty `conda env export` dumps — and the check that
+missed it compared only the torch *version numbers*, which do agree (conda `pytorch=1.11.0`, pip
+`torch==1.11.0`). The pip section's 180 entries are what the authors happened to have installed, and
+**at least three of them cannot be satisfied from PyPI at all**:
+
+| entry | why it can never install |
+|---|---|
+| `deepgaze-pytorch==0.2.0` | not published to PyPI (GitHub-only). **Imported nowhere in this repository** — `grep -rn deepgaze SE-Net/ ISP/ tools/` is empty. |
+| `multiscaledeformableattention==1.0` | this **is Step 3's own build output** — `ops/setup.py` declares `name="MultiScaleDeformableAttention", version="1.0"`. It is compiled by `make.sh`, never downloaded. |
+| `ace-tools==0.0` | a stub version of a package that is not on PyPI. |
+
+`conda env create -f SE-Net/environment.yml` therefore **fails at the pip stage every time**, reporting
+whichever of the three pip resolves first (observed: `deepgaze-pytorch`). Because pip resolves the whole
+set before installing anything, **no pip package is installed and the conda half is left intact** — so
+the failure is recoverable without recreating the env.
+
+Two further hazards in the same section, which is why the fix is to skip it rather than to prune the
+three:
+
+- **`torch==1.11.0` from PyPI is a cu102 build.** Installing it over conda's
+  `pytorch=1.11.0=py3.8_cuda11.3_cudnn8.2.0_0` would replace the CUDA build that MSDeformAttn must
+  compile against, while leaving the version string looking correct.
+- **The `nvidia-*-cu12` wheels and `triton==2.1.0` belong to a torch 2.x / CUDA 12 stack**, not to this
+  env's cu113. They are export noise from another environment on the same machine.
+
+**The supported path (FR1.1's "minimal env" branch, recorded per D5):** create from the conda section
+alone, then add by hand only what F3's import path actually reaches. That path is
+`tools/eve_senet/{dataset,embed}.py` → `SE-Net/common/{config,utils,data}.py` and `SE-Net/src/models.py`,
+and it needs exactly:
+
+| package | source | why |
+|---|---|---|
+| pytorch 1.11.0 cu113, torchvision 0.12.0, numpy 1.23.5, scipy 1.10.0, pillow, scikit-image | **conda section** | already there |
+| `opencv-python` | pip, `--no-deps` | `common/utils.py` does `import re, cv2` at module scope |
+| `scikit-learn` | pip, `--no-deps` | `common/utils.py` does `from sklearn.model_selection import KFold` at module scope. **Version is unconstrained**: `KFold` is used only by `fold_split()`, which F3 never calls — the import must merely succeed. Do not fight the `0.22.2` pin. |
+| `timm` 0.6.13 | pip, `--no-deps` | `src/backbone/swin.py` |
+| `detectron2` + `fvcore` | source install (§1 Step 2) | `src/models.py`, both pixel decoders, the transformer decoder |
+| `MultiScaleDeformableAttention` | `make.sh` (§1 Step 3) | compiled in place, never installed |
+
+Install the pip four with `--no-deps`, the lesson §1.1 records from F1: an unconditional `pip install`
+lets pip resolve their numpy/scipy requirements and move versions the conda solve just pinned.
+
+Everything else in those 180 entries — Jupyter, JupyterLab, mmcv, diffusers, transformers,
+sentence-transformers, seaborn, openxlab, the aliyun SDK — is unreached. (`sentence-transformers` is
+ISP Stage B's, and even there it is stubbed rather than installed; see §1.1.)
+
+**`check_env.py` probes `cv2` and `sklearn` as of 2026-09-11**, added after this failure. Both are
+module-scope imports of `common/utils.py`, so a missing one is an `ImportError` before any F3 code
+runs; neither was covered by the original nine probes, and `environment.yml` puts both *only* in the
+unusable pip section — precisely the combination that produces a confusing failure three steps later.
+
 ### `senet` — SE-Net (subject embeddings, Stage C)
-Created from `SE-Net/environment.yml`. **Not needed for F1**, and not needed at all unless OPEN-2 is
-resolved toward generating our own embeddings.
+Created from `SE-Net/environment.yml` — but **its pip section cannot be installed; see §1.2**.
+OPEN-2 resolved toward generating our own embeddings on 2026-09-10, so this env **is** needed (F3).
+`deepgaze-pytorch` appears in the table below for fidelity to the file; it is imported nowhere in
+the repository and must not be installed.
 
 | package | pin (`SE-Net/environment.yml`) | notes |
 |---|---|---|
@@ -228,6 +285,45 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
   everything from the repo root with the branch prefix (above) keeps all four paths in one frame.
   The tool detects this specific mix-up and names it rather than reporting the sweep as missing.
 - Its tests: `py -m pytest tests/osie_prep -q` (74 tests). No fixtures or cluster data needed.
+- **The F3 subject-embedding run (Stage C)**, from the repo root on the cluster, in the `senet` env.
+  Interactive under `salloc`, like F1's; `sbatch` still works and the `#SBATCH` block is retained:
+  ```
+  salloc --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=04:00:00
+  bash bash/embed_eve_subjects.sh            # SEED=0
+  SEED=1 bash bash/embed_eve_subjects.sh     # a second draw from the same support pools
+  ```
+  **`bash script`, never `source script`** — same reason as F1's: `-euo pipefail` under `source`
+  applies to the login shell. Every tunable is overridable from the environment: `SENET_ENV`, `SEED`,
+  `NUM_FEWSHOT`, `BRIDGE_DIR`, `OUT_DIR`, `CKPT`, `CONFIG`, `DATA_ROOT`, `DEVICE`. Artefacts land under
+  `$OUT_DIR/seed$SEED/`, so a second seed cannot overwrite the first (§3.5a's lesson, applied up front).
+
+  The script's order is preflight → embed → verify → `.pyc` cleanup, and the first and third of those
+  gate on **exit codes**:
+  - `py tools/eve_senet/check_env.py [--senet-dir DIR] [--versions PATH]` — probes `torch`,
+    `torch.cuda.is_available()`, `torchvision`, `numpy`, `scipy`, `timm`, `detectron2` and the
+    MSDeformAttn extension, one `try` each so it runs to completion in a *broken* env (the only env
+    where it is interesting). JSON on **stdout**, a table on stderr, non-zero exit on any failure.
+    `--versions` writes FR1.5's `versions.txt` **from the same resolution code**, so the recorded stack
+    cannot disagree with the checked one — §1.1's lesson made structural rather than restated.
+  - `py tools/eve_senet/verify_embedding.py --embedding PATH --subject-map PATH [--report PATH]` —
+    CPU-only and CUDA-free, so it runs on a login node or on Windows. Shape / dtype / finiteness /
+    no-zero-row / no-duplicate-row, the `to_dense`↔`to_eve` roundtrip for all 38 ids, and with
+    `--report` the filename-vs-report seed agreement. Prints `dense_id → eve_id → ||row||₂` for every
+    row, which is where D4's "which of my real subjects is row 3?" gets a literal answer. It shares no
+    code with `embed.py`'s own assertions on purpose: a checker built from the writer's helpers can
+    only confirm the writer was self-consistent.
+- `py tools/eve_senet/embed.py --checkpoint PATH [--fixations ...] [--num-fewshot 10] [--seed 0]
+  [--device cuda] [--raw-durations] [--allow-missing-key PREFIX]`, if invoked directly. `--device cpu`
+  is **refused** unless `--allow-cpu` is also passed, so a silently CPU-bound run cannot be mistaken
+  for a normal one. `--raw-durations` is validation Group 5's control arm and nothing else.
+- Its tests: `py -m pytest tests/eve_senet -q` (60 tests). The `bridge`-marked ones read the real
+  `data/eve_bridge/` artefacts and **skip** when absent — that directory is git-ignored, so a fresh
+  checkout has none.
+
+  > **Run each test directory in its own invocation.** `tests/eve_bridge`, `tests/osie_prep` and
+  > `tests/eve_senet` each carry a `conftest.py` that its own modules import by bare name
+  > (`from conftest import ...`) with no `__init__.py`, so collecting two of them in one pytest run
+  > makes the first `conftest` shadow the others and the imports fail. Pre-existing, not new with F3.
 
 ---
 
@@ -238,6 +334,8 @@ few-shot-scanpath/
 ├── SE-Net/                         # Stage C — Subject-Embedding Network (built on HAT)
 │   ├── train.py                    #   entry point; --eval-only emits subject embeddings
 │   ├── configs/*.json              #   per-dataset hparams (osie_useremb.json, ...)
+│   │                               #   + eve_useremb.json — OURS, added 2026-09-10 (F3).
+│   │                               #   A NEW file; no shipped config was edited
 │   ├── common/{data,dataset,metrics,losses}.py
 │   └── src/{builder,models}.py, backbone/swin.py, pixel_decoder/ (MSDeformAttn)
 │
@@ -279,10 +377,20 @@ few-shot-scanpath/
 │   └── aggregate_seeds.py          #   FR13.3 seed-sweep pooling + GENERATED run record
 │                                   #   (--report). stdlib only. Added 2026-09-09; see §3.5b
 │
+├── tools/eve_senet/                # ◀ Stage C — OUR code. CPU dev / GPU run. Added 2026-09-10 (F3)
+│   ├── __init__.py                 #   EveSenetError
+│   ├── check_env.py                #   FR1.4 preflight AND FR1.5 versions.txt, one source
+│   ├── durations.py                #   EVE's own decile duration bins (numpy only, Windows)
+│   ├── dataset.py                  #   EveSupportDataset (anchor only) + build_fix_labels
+│   ├── embed.py                    #   selection, model, forward pass, pipeline, CLI
+│   └── verify_embedding.py         #   FR9 structural verifier (CPU; exit code drives the guard)
+│
 ├── bash/test_osie.sh               # ◀ OUR code. The single sbatch script for F1
+├── bash/embed_eve_subjects.sh      # ◀ OUR code. The single run script for F3
 │
 ├── tests/eve_bridge/               # pytest, CPU. `[bundle]`-marked tests need --bundle-dir
 ├── tests/osie_prep/                # pytest, CPU. Self-contained fixtures, no cluster data
+├── tests/eve_senet/               # pytest, CPU. `bridge`-marked tests need data/eve_bridge/
 │
 ├── weights/                        # released checkpoints (git-ignored: *.pt, *.pth)
 │   ├── OSIE-.../OSIE/{checkpoint_best.pth, ckp_11999.pt,
@@ -582,6 +690,64 @@ defaults `FIX_JSON` to the canonical file, and `data/` is git-ignored (working c
 The name is the trap: `osie_fixations_update_duration.json` reads like the file where durations were
 *fixed up*. It is the file where they were *replaced*.
 
+### 3.8 EVE subject-embedding artefacts (Stage C output, added 2026-09-10)
+
+`tools/eve_senet/embed.py` writes three things into `--out-dir` (`data/eve_senet/seed$SEED/` under the
+run script). F5 consumes the artefacts, never the code.
+
+| artefact | consumer | contract |
+|---|---|---|
+| `eve_fewshot_user_embedding_{num_fewshot}_seed{seed}.pt` | **F5's `--user_emb_path`** | `torch.float32` tensor `(38, 384)`, `torch.save`d. Row *i* is dense subject *i*, i.e. `subject_id_map.json`'s `to_eve[str(i)]` — rows are stacked in ascending dense-id order by construction, never by dict iteration order (D4). No row is all-zero, and none is a duplicate of another. |
+| `senet_report.json` | F5, F7 | Resolved args, `duration_bin_edges` (11 floats) + `duration_bin_occupancy`, the realised `support_selection` (38 × 10 stimulus names), `per_subject` (`eve_id`, `n_forward`, `row_norm`), `senet_input_size` / `senet_rescale`, `task_emb_source` + key, `missing_keys` / `unexpected_keys` in full, `fixations_sha256`, `checkpoint_sha256`, `embedding_sha256`, and every D7 counter — always present, `0` when nothing fired. |
+| `versions.txt` | D5 | The resolved stack, written by `check_env.py`'s own resolution code (§1.1). |
+
+Five properties that matter downstream:
+
+- **The seed is in the filename *and* in the report, and `verify_embedding.py --report` asserts they
+  agree.** This is the guard `aggregate_seeds.py` needed for F1 — a mis-targeted copy step pooling
+  non-replicates — installed up front rather than after the fact.
+- **`embedding_sha256` is the handshake with F5.** F5 asserts it before consuming the tensor, so the
+  two features cannot silently be discussing different artefacts. `checkpoint_sha256` likewise pins
+  *which* released SE-Net checkpoint produced them, giving OPEN-7's "the released checkpoint may differ
+  from the one behind the table" question a concrete handle on the SE-Net side too.
+- **`fixations.json` is sha256-gated on the way in**, against `bridge_report["fixations_sha256"]`. A
+  merely **reordered** JSON is correctly rejected: F2's artefacts are addressed positionally (working
+  convention 10), so an order-insensitive check would let a mis-indexed run through.
+- **`senet_rescale = [0.266667, 0.296296]` is a SECOND squash, not the one in OPEN-4.** SE-Net's input
+  is 512×**320** (8:5); F5's metric screen is 512×**384** (4:3, `resizescale = 3.75 / 2.8125`). The two
+  distortions are independent and **both** must reach F7. The report records the SE-Net one explicitly
+  so it cannot be inferred away later.
+- **`num_fewshot` is exactly 10 per subject, never "whatever the pool holds".** F2 dropped `train23`
+  specifically to raise `min_support_per_subject` from 9 to 10 and buy the paper's n = 10 row; using
+  each subject's whole pool would give some participants 20 shots and others 10, leaving the cohort's
+  rows unequally informed and the comparison to that row unsound.
+
+#### Two upstream behaviours F3 works around, and one it pins
+
+Recorded because each is a plausible-but-wrong number waiting to happen, and none is a defect to fix
+upstream (working convention 2 — additive over invasive; `SE-Net/` is untouched):
+
+1. **`Siamese_Triplet_Gaze.__getitem__` cannot run on a single-subject dataset.** It builds the full
+   training triplet regardless of eval mode and draws the negative from a *different* subject, so the
+   candidate comprehension is empty and `random.choice` raises `IndexError`. The `num_fewshot == 1`
+   short-circuit would dodge it but is gated on the shot count, not on eval mode. F3 must invoke
+   SE-Net **per subject** (the union draw in `select_fewshot_subject()` would otherwise hand each
+   subject ≈ 10/38 scanpaths from our stimulus-disjoint pools), so it *subclasses* the class and
+   returns the anchor alone — which is all `evaluate_user_siamese` ever reads (`batch = batch['anchor']`).
+2. **`builder.py` builds the eval loader with `drop_last=True` at `batch_size // 2 = 8`.** A 10-scanpath
+   support set would yield one batch of 8 and silently discard 20 % of the evidence. F3 uses
+   `drop_last=False` and asserts the forward-passed count equals `num_fewshot` for every subject.
+   (`evaluate_user_siamese` has a second defect F3 also avoids: its `num_fewshot == 1` branch saves an
+   **un-normalised sum** rather than a mean.)
+3. **The duration channel is dead.** `SE-Net/src/models.py` does `ventral_embs += ventral_pos`, then
+   computes `duration_encoding`, adds it into `ventral_pos`, and calls `ventral_pos.fill_(0)` on the
+   next line; `ventral_pos` is then reused as an accumulator for the indicator embeddings. Nothing
+   reads it in between, so the duration never reaches the network. F3 still feeds EVE's own **decile
+   bins** — the input contract the released checkpoint was trained under (§3.7), one numpy call, and
+   correct if a future variant consumes the channel — and **pins the deadness with a bitwise-identity
+   check** (`--raw-durations` is the control arm) rather than assuming it. If that check ever fails,
+   the channel has come alive and every embedding produced under the assumption is invalid.
+
 ---
 
 ## 4. Metric contracts (FROZEN — see D1)
@@ -736,6 +902,18 @@ Two more COCO_FV-specific contracts, for the same reason:
    > aggregator failed on the cluster with a missing `--reference`. When adding a broad ignore, check
    > it against `git status --ignored` for artefacts that are part of the *record* rather than the
    > *data*.
+   >
+   > **Negated again for `SE-Net/configs/` on 2026-09-10** (`!SE-Net/configs/*.json`), for the same
+   > reason and caught the same way. Those files are hparam **source**, not data; the shipped
+   > OSIE/COCO ones only survive because `.gitignore` does not untrack. F3's new
+   > `eve_useremb.json` would have been invisible — not untracked, simply absent on the next
+   > checkout, with the run failing on a missing `--config`. Same failure, second instance:
+   > check any broad ignore against `git status --ignored` before trusting it.
+   >
+   > `*.so`, `**/ops/build/` and `*.egg-info/` were added at the same time for MSDeformAttn's
+   > compiler output. `sh SE-Net/src/pixel_decoder/ops/make.sh` builds **in place inside the repo** —
+   > the one step in the project that writes into `SE-Net/`, and it must read as a build artefact
+   > rather than an edit to a tracked file.
 6. **`__pycache__` directories are checked in upstream.** Ignore them; do not "clean up" — the 89
    tracked ones stay tracked (`.gitignore` does not untrack). Do delete any *new* `.pyc` your own runs
    drop into upstream directories: loading `loss.py` or `dataset.py` via `importlib` writes them.
@@ -745,6 +923,13 @@ Two more COCO_FV-specific contracts, for the same reason:
 9. **The bridge never imports frozen code.** `tools/eve_bridge/` must not import anything under
    `ISP/*/GazeformerISP/src/utils/`. Its only ISP dependency is `models/loss.py`, loaded by path.
    Keep torch confined to `heatmap_metrics.py` so the rest stays runnable on the Windows dev machine.
+
+   > **`tools/eve_senet/` is stricter still** (added 2026-09-10): it does not touch the ISP tree *at
+   > all*, and it does not import `tools/eve_bridge/` either — it reads the bridge's **artefacts**
+   > (D2), so the two packages share no module. What it does import is `SE-Net/`, which it may read
+   > and subclass but never edit (convention 2). Keep the heavy imports deferred: `check_env.py`,
+   > `durations.py` and `verify_embedding.py` must stay Windows-runnable, and `embed.py` reaches
+   > Detectron2/MSDeformAttn only inside `load_model()`.
 10. **Bridge artefacts are addressed positionally.** `fixations.json` record order *is* the key space
     for `gt_heatmaps.h5`. If you regenerate one, regenerate the other; the `fixations_sha256` check
     exists to make the mistake loud rather than silent.

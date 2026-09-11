@@ -1,7 +1,7 @@
 # Roadmap
 
 > Constitution file 3 of 3. Read together with [Mission.md](Mission.md) and [TechStack.md](TechStack.md).
-> Last updated: 2026-09-09
+> Last updated: 2026-09-10
 >
 > **F1 CLOSED 2026-09-09 — accepted with a flagged gap (OPEN-7).** The pipeline ran end to end, all
 > three seeds are computed, and the run record is generated from artefacts: SM **0.3704 ± 0.0041**,
@@ -24,8 +24,10 @@
 > out), so a large cohort scores fine at `subject_num = 3`. EVE caps subjects **per image** at
 > 2–4, not the cohort. See §5 OPEN-5 and the spec's `notes.md` §6.
 >
-> **F3, F4 and F5 are unblocked** (F4 still needs OPEN-6, now at 925 conflicts). F6 remains
-> startable at any time.
+> **F3 is code complete as of 2026-09-10** — `tools/eve_senet/`, 60/60 tests, OPEN-2 resolved
+> toward generating our own embeddings. It now blocks only on the `senet` env (Detectron2 +
+> MSDeformAttn) and a GPU. F4 still needs OPEN-6, now at 925 conflicts. F6 remains startable
+> at any time.
 
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
@@ -43,7 +45,7 @@
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
 | F1 | Reproduce the **OSIE** eval baseline on the cluster | ✓ **DONE** (2026-09-09) — accepted, gap flagged as **OPEN-7** | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ✓ **DONE** (2026-09-10) — 38 subjects, 1062 scored cells | — |
-| F3 | Subject embeddings for our subjects | ▶ **NEXT** | **OPEN-2** |
+| F3 | Subject embeddings for our subjects | ◐ **CODE COMPLETE** (2026-09-10) — `tools/eve_senet/`, 60/60 tests; **not yet run** | the `senet` env (Detectron2 + MSDeformAttn) + a GPU |
 | F4 | Feature extraction for our stimuli | ⏸ TODO | **OPEN-6** |
 | F5 | Our-dataset eval branch + run script | ⏸ TODO | F3, F4 |
 | F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — the only unblocked feature; F1 produced its fixture | — |
@@ -70,7 +72,7 @@ Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸
              │                         │
       ┌──────┴────────┐                │
       ▼               ▼                │
- F4 features    OPEN-2 ─► F3 subj emb  │
+ F4 features    OPEN-2 ✓─► F3 subj emb ◐│
    ▲  │               │                │
 OPEN-6└───────┬───────┘                │
               ▼                        │
@@ -354,32 +356,93 @@ from images seen by 4 — routing it to support would put one name in both split
 
 ---
 
-### F3 — Subject embeddings for our subjects ▶ NEXT
+### F3 — Subject embeddings for our subjects ◐ CODE COMPLETE (2026-09-10), not yet run
 
-Depends on **OPEN-2** only (OPEN-5 resolved 2026-09-10). Implements Stage C. F2 produced a support
-pool of **10–20 never-scoreable stimuli per subject** (`min_support_per_subject = 10`, median 20),
-disjoint by stimulus from the scored split, so the paper's `num_fewshot = 10` fits exactly. The
-embedding tensor needs **38 rows**, in dense-id order per `subject_id_map.json`.
+Spec: [`spec/2026-09-10-eve-subject-embeddings/`](../2026-09-10-eve-subject-embeddings/)
+(requirements · plan · validation). Implements Stage C; satisfies D4, D5, D7, D8; constrained by D1.
 
-- [ ] Resolve OPEN-2 (whose subject embeddings do our subjects get?).
-- [ ] **Run SE-Net once per subject, not once for the cohort** *(new 2026-09-10)*.
-      `select_fewshot_subject()` draws `num_fewshot` image names from the **union** over the
-      fewshot subjects and keeps whichever subjects have each. Our support pools are
-      per-subject **disjoint**, so a single draw of 10 names would hand each subject only ≈ 10/N
-      scanpaths, unequally. Invoke it with one `--fewshot_subject` at a time so the draw comes
-      from that subject's own pool, then concatenate the rows in dense-id order. Call-site only;
-      no frozen code involved. Spec: FR3.4a.
-- [ ] Verify the tensor is `(38, 384)` and that row *i* is `subject_id_map.json`'s `to_eve[str(i)]`.
-- [ ] Feed SE-Net the **`train`-split** trials only. F2 guarantees that pool is disjoint by stimulus
-      from the scored `test` split, which is what makes the few-shot embedding legitimate; reading a
-      `test` record into the support set silently invalidates every cell of the score matrix.
-- [ ] If generating our own: build the `senet` env including Detectron2 + MSDeformAttn (the highest-risk
-      install in the project — [TechStack.md](TechStack.md) §1), add a config under `SE-Net/configs/`, run
-      `train.py --eval-only --fewshot_subject ...`.
-- [ ] If reusing a released embedding: document precisely which subjects' embeddings are being borrowed
-      and what that does to the interpretation of the numbers (feeds F7).
-- [ ] Verify the produced tensor's shape matches `args.subject_feature_dim = 384` and its row order matches
-      the dense subject indices from F2.
+**OPEN-2 resolved toward option 1** — we generate genuine embeddings for our own participants and pay
+the Detectron2 + MSDeformAttn install cost. Borrowing the released `(10, 384)` tensor would sever P2's
+link between prediction *i* and subject *i* and reduce F5 to measuring how well an OSIE viewer's habits
+predict an EVE viewer's. **F7 still inherits an honesty obligation**: the SE-Net *checkpoint* is
+OSIE-trained even though the embeddings are ours, so what transfers is the encoder, not the subjects.
+
+F2 produced a support pool of **10–20 never-scoreable stimuli per subject**
+(`min_support_per_subject = 10`, median 20), disjoint by stimulus from the scored split, so the paper's
+`num_fewshot = 10` fits exactly. The tensor is **`(38, 384)`**, row *i* = `subject_id_map.json`'s
+`to_eve[str(i)]`.
+
+Built 2026-09-10 (Windows CPU) — `tools/eve_senet/`, `SE-Net/configs/eve_useremb.json`,
+`bash/embed_eve_subjects.sh`, `tests/eve_senet/` (**60/60 pass**; no tracked file under `SE-Net/` or
+`ISP/` modified, D1 intact):
+
+- [x] **`train.py --eval-only` is unusable for our data, for three independent reasons**, all call-site
+      problems rather than upstream defects — which is why F3 is a thin driver of our own
+      (`tools/eve_senet/`) rather than a patch. (a) `common/dataset.py::process_data` raises
+      `NotImplementedError` for any `Data.name` outside its five. (b) **Per-subject invocation
+      crashes**: `Siamese_Triplet_Gaze.__getitem__` builds the full training triplet regardless of eval
+      mode and draws its negative from a *different* subject, so with one subject in the dataset
+      `random.choice` gets an empty list and raises `IndexError`. The `num_fewshot == 1` short-circuit
+      would dodge it but is gated on the shot count, not on eval mode, so at the paper's n = 10 the draw
+      is live; the authors never hit it because OSIE is invoked with all five unseen subjects at once.
+      (c) `builder.py` builds the eval loader with **`drop_last=True` at `bs = 8`**, which on a
+      10-scanpath support set silently discards 20 % of the support evidence. We *subclass*
+      `Siamese_Triplet_Gaze` to take the anchor alone — the semantics `evaluate_user_siamese` already
+      has, since it does `batch = batch['anchor']` — and construct `UserEmbeddingNet` directly.
+- [x] **SE-Net is invoked once per subject, not once for the cohort.** `select_fewshot_subject()` draws
+      `num_fewshot` names from the **union** over the fewshot subjects; our pools are disjoint by
+      stimulus, so one draw of 10 would hand each subject ≈ 10/38 scanpaths. Replaced by a per-subject
+      seeded draw (`random.Random(f"{seed}:{s}")` over lexicographically sorted names), exactly
+      `num_fewshot` each, reproducible across processes and independent of `PYTHONHASHSEED`. Verified on
+      the real pools: **seed 1 moves 37 of 38 subjects**; subject 34 has exactly 10 support stimuli and
+      correctly draws the same 10 — which is what `support_pool_size = 20` was engineered to buy
+      (OPEN-3).
+- [x] Only `train`-split records are read, and a `test` record in the candidate set **raises** — a
+      support/query leak, never a filter. The realised selection is additionally re-checked for
+      disjointness against the scored split on the artefact F3 consumed, rather than trusted from the
+      bridge report.
+- [x] `fixations.json` is sha256-gated against `bridge_report["fixations_sha256"]`, so a corrupted **or
+      merely reordered** JSON raises (convention 10). `min_support_per_subject >= num_fewshot` is
+      asserted — the **minimum**, not `support_pool_size`. The `subject_id_map` roundtrip is asserted for
+      all 38 dense ids (D4).
+- [x] **EVE's own decile duration bins are re-derived, never borrowed.** The released checkpoint was
+      trained on `osie_fixations_update_duration.json`, whose `T` is a bin index 0–9 (TechStack §3.7);
+      EVE carries milliseconds and a different distribution (min 100 ms vs OSIE's 20 ms). Realised edges
+      `[100, 131, 151, 169, 188, 210, 234, 263, 308, 390, 1144]` ms over the support split's 4,240
+      fixations — **computed at run time, and a test asserts they are absent from the source**, so a
+      future bridge run cannot be quantised against a stale distribution.
+- [x] **The duration channel is dead in the released SE-Net.** `src/models.py` adds `duration_encoding`
+      into `ventral_pos` and calls `ventral_pos.fill_(0)` on the next line, after
+      `ventral_embs += ventral_pos` has already happened — the duration never reaches the network. Bins
+      are fed anyway (the faithful input contract, one numpy call, correct if a future variant consumes
+      the channel); the deadness is **pinned by a bitwise-identity check**, not assumed. `--raw-durations`
+      is that check's control arm. **The pin itself is GPU-side and still outstanding.**
+- [x] Out-of-bound fixations (`preprocess_fixations` drops them silently) and length-1 scanpaths are
+      **counted and reported**, not swallowed (D7). EVE's `Y` reaches exactly 1080.0, which rescales to
+      exactly 320.0 and is therefore dropped, so a small non-zero count is expected.
+- [x] **A second, different squash**, recorded so it reaches F7: SE-Net's input is 512×**320** (ratios
+      0.2667 / 0.2963), while F5's metric screen is 512×**384** (OPEN-4). Independent distortions; both
+      must be stated.
+- [x] `data/eve_senet/` is git-ignored, and `.gitignore` gained `!SE-Net/configs/*.json` — **the blanket
+      `*.json` rule would have swallowed `eve_useremb.json`**, exactly the failure recorded for
+      `paper_reference.json` (TechStack convention 5). Also added `*.so`, `**/ops/build/`, `*.egg-info/`
+      for MSDeformAttn's compiler output.
+- [ ] **Build the `senet` env** from `SE-Net/environment.yml`, then **Detectron2 from source** and
+      **MSDeformAttn** (`sh SE-Net/src/pixel_decoder/ops/make.sh`) — the highest-risk install in the
+      project ([TechStack.md](TechStack.md) §1). `py tools/eve_senet/check_env.py` reports each as
+      `ok`/`FAIL` with its resolved version and gates the run on its exit code; on the dev machine it
+      correctly exits 1 (no CUDA, no timm, no Detectron2, no MSDeformAttn).
+- [ ] **Establish the missing-key allowlist.** `MISSING_KEY_ALLOWLIST` ships **empty** on purpose — an
+      allowlist guessed in advance defeats the check it exists for. Run `load_model()` once, read the
+      `missing_keys` it raises with, decide per key whether the checkpoint genuinely omits it, and record
+      the resolved list in the source with a comment naming why. Any `subject_predictor.*` key is
+      **never** allowlistable: it means `num_subjects` disagrees with the checkpoint and `strict=False`
+      has left the head randomly initialised.
+- [ ] Run `bash bash/embed_eve_subjects.sh` at seeds 0 and 1 under `salloc`, then the GPU-side validation
+      — Group 4 (model loading and forward pass), Group 5 (the duration pin), and the Data Validity
+      block. Seed 1 is the artefact F5 needs if OPEN-3's repeat question resolves toward averaging.
+- [ ] Add a `notes.md` to the spec folder if the run surfaces anything structural (the F2 convention, not
+      F1's generated-record one).
 
 ---
 
@@ -417,7 +480,16 @@ D1, D3, D4, D5, D8. Cohort: `--subject_num 3`, **354 scored stimuli / 1062 cells
       `i_batch > 100` cap).
 - [ ] Assert `num_fewshot <= min_support_per_subject` from `bridge_report.json` (OPEN-3, FR3.4).
       The **minimum**, not `support_pool_size`: the support pools are per-subject and share no
-      image names, so the thinnest one is the binding constraint.
+      image names, so the thinnest one is the binding constraint. F3 asserts this too.
+- [ ] **Point `--user_emb_path` at F3's tensor**, not the released OSIE one:
+      `data/eve_senet/seed0/eve_fewshot_user_embedding_10_seed0.pt`, `(38, 384)` float32. Assert its
+      `embedding_sha256` against `senet_report.json` before consuming it (F3 FR8.2), so the two
+      features cannot silently be discussing different artefacts.
+- [ ] **Pass `--fewshot_subject 0 1 2 ... 37` in ascending order.** `select_fewshot_subject()` remaps
+      the argument list to a dense `0..N-1` range and indexes `self.subject_embed[subjects]` with it;
+      only the ascending order produces the identity remap that keeps row *i* on subject *i*. **Any
+      other argument order silently permutes the entire cohort's embeddings and every metric still
+      looks plausible** — this is F5's live D4 trap.
 - [ ] **Report retrieval separately, and annotate R@3.** At `--subject_num 3` every rank lies in
       `{0,1,2}`, so **R@3 is structurally saturated at 100 %** and R@5 doubly so; quote **R@1 and
       MRR**. Keep the block out of the paper-comparable row — the published cohort size differs.
@@ -518,12 +590,22 @@ diffable against the shipped OSIE JSON (D2), and the whole thing runs on Windows
 `evedataset` dependency stays outside the ISP tree so `ISP/OSIE/GazeformerISP/`'s import surface
 is unchanged.
 
-### OPEN-2 — Whose subject embeddings do our subjects get? *(blocks F3, colours F7)*
-The released `fewshot_user_embedding_10.pt` encodes *OSIE subjects 10–14*, not ours. Options:
+### ~~OPEN-2~~ — Whose subject embeddings do our subjects get? ✓ RESOLVED 2026-09-10: **option 1, generate our own**
+The released `fewshot_user_embedding_10.pt` encodes *OSIE subjects 10–14*, not ours. The options were:
 1. Run SE-Net over a support set of our subjects' real scanpaths to produce genuine embeddings for them
    — scientifically correct, but requires the Detectron2 + MSDeformAttn install.
 2. Reuse a released embedding as a stand-in — cheap, but the "personalization" being measured is then
    somebody else's, and F7 must say so plainly.
+
+**Decided: option 1.** The released tensor is `(10, 384)` and cannot address 38 subjects; tiled or
+truncated it would encode somebody else's viewing behaviour, severing P2's claim that prediction *i* is
+meaningful *because* it is personalised to subject *i*. Under option 2 F5 would be measuring how well an
+OSIE viewer's habits predict an EVE viewer's, which is not the mission. We pay the install cost.
+
+**What this does NOT buy, and F7 must say so.** The SE-Net **checkpoint** is still OSIE-trained. The
+embeddings are ours; the encoder that produced them is theirs. What transfers is a representation
+learned on OSIE subjects, applied to EVE support scanpaths — better than borrowing rows outright, but
+not the same as a model trained on our cohort (which D8 puts out of scope).
 
 ### OPEN-3 — Support/query split for our subjects ◐ PARTIALLY RESOLVED 2026-09-08 *(still colours F5)*
 Answered by F2:

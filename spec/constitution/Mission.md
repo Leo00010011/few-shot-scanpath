@@ -1,7 +1,7 @@
 # Mission
 
 > Constitution file 1 of 3. Read together with [TechStack.md](TechStack.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-09
+> Last updated: 2026-09-10
 
 ---
 
@@ -131,9 +131,14 @@ saliency maps, so that ground truth is derived from the scanpath itself, by the 
 `OSIE.__getitem__` already uses for training. It is what makes an NSS/CC/KLD block possible alongside
 the scanpath metrics; see the denominator warning in [TechStack.md](TechStack.md) §4.1.
 
-Stages B–E already exist and are to be *configured*, not rewritten. Stage C, in eval-only mode, may
-reduce to loading a released `*_user_embedding.pt` — but that embedding was learned for the *original*
-subjects, not ours, which is the central open scientific question recorded in
+Stages B–E already exist and are to be *configured*, not rewritten. **Stage C is the exception, and
+OPEN-2 settled it on 2026-09-10: we generate our own embeddings** rather than loading a released
+`*_user_embedding.pt`. The released tensor is `(10, 384)` and encodes OSIE subjects 10–14; it cannot
+address 38 participants, and borrowing it would sever P2's claim that prediction *i* is meaningful
+*because* it is personalised to subject *i*. `tools/eve_senet/` (F3) drives the released SE-Net
+checkpoint over each participant's own 10-shot support set and writes a `(38, 384)` tensor in dense-id
+order. **The checkpoint is still OSIE-trained**: what transfers is the encoder, not the subjects, and
+F7 must say so — that is what remains of the open scientific question recorded in
 [Roadmap.md](Roadmap.md).
 
 **Stage A has run for real (2026-09-10).** `data/eve_bridge/` holds `fixations.json`,
