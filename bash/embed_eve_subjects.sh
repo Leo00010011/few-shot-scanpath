@@ -63,17 +63,25 @@ mkdir -p "$SEED_DIR" logs
 python tools/eve_senet/check_env.py --versions "$SEED_DIR/versions.txt" \
     > "$SEED_DIR/check_env.json"
 
-# The backbone init file. SE-Net/src/models.py loads data/resnet50.yaml's
-# MODEL.WEIGHTS unconditionally and STRICTLY, and that pickle ships with neither this
-# repo nor the checkpoint bundle -- so without this, model construction dies with a
-# bare FileNotFoundError several frames inside SE-Net. It is initialisation only:
-# load_model() overwrites every backbone tensor from the same checkpoint immediately
-# afterwards, which is why deriving it from that checkpoint is sound. Generated once,
-# never overwritten (pass --force deliberately if you later obtain the real pickle).
+# The encoder init files. SE-Net/src/models.py loads TWO pickles unconditionally and
+# STRICTLY -- data/resnet50.yaml's MODEL.WEIGHTS (the ResNet) and the same name with
+# _MSDeformAttnPixelDecoder appended (the pixel decoder) -- and neither ships with this
+# repo or the checkpoint bundle, so without these, model construction dies with a bare
+# FileNotFoundError several frames inside SE-Net. They are initialisation only:
+# load_model() overwrites all 265 + 117 tensors from the same checkpoint immediately
+# afterwards, which is why deriving them from that checkpoint is sound. Generated once,
+# never overwritten (pass --force deliberately if you later obtain the real pickles).
 BACKBONE_INIT="${BACKBONE_INIT:-data/M2F_R50.pkl}"
+DECODER_INIT="${BACKBONE_INIT%.pkl}_MSDeformAttnPixelDecoder.pkl"
+# Per component, so a pickle that is already there is never replaced: it may be the
+# authors' genuine one, which is the more faithful input.
 if [ ! -f "$BACKBONE_INIT" ]; then
     echo "-- $BACKBONE_INIT absent; deriving it from $CKPT"
-    python tools/eve_senet/make_backbone_init.py         --checkpoint "$CKPT" --out "$BACKBONE_INIT"         > "$SEED_DIR/backbone_init.json"
+    python tools/eve_senet/make_backbone_init.py --component backbone         --checkpoint "$CKPT" --out "$BACKBONE_INIT"         > "$SEED_DIR/backbone_init.json"
+fi
+if [ ! -f "$DECODER_INIT" ]; then
+    echo "-- $DECODER_INIT absent; deriving it from $CKPT"
+    python tools/eve_senet/make_backbone_init.py --component pixel_decoder         --checkpoint "$CKPT" --out "$BACKBONE_INIT"         > "$SEED_DIR/pixel_decoder_init.json"
 fi
 
 # FR8 -- stdout is teed because the report summary is printed, not logged.

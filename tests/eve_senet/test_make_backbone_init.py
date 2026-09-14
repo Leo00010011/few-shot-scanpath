@@ -87,3 +87,58 @@ def test_an_existing_pickle_is_never_overwritten_without_force(tmp_path):
 def test_missing_checkpoint_raises_our_error(tmp_path):
     with pytest.raises(EveSenetError):
         extract_backbone(os.path.join(str(tmp_path), "nope.pt"))
+
+
+# ------------------------------------------------------------ the pixel decoder
+
+from eve_senet.make_backbone_init import (component_path, extract_component,
+                                          write_all)
+
+
+def _full_senet_like():
+    d = _senet_like()
+    d.update({
+        "encoder.pixel_decoder.lateral_convs.adapter_1.weight": torch.randn(2, 2),
+        "encoder.pixel_decoder.output_convs.layer_1.weight": torch.randn(2, 2),
+        "encoder.pixel_decoder.transformer.layers.0.weight": torch.randn(2),
+    })
+    d.pop("encoder.pixel_decoder.thing")
+    return d
+
+
+def test_pixel_decoder_filename_is_derived_exactly_as_models_py_derives_it():
+    # models.py: cfg.MODEL.WEIGHTS[:-4] + '_MSDeformAttnPixelDecoder.pkl'
+    assert component_path("data/M2F_R50.pkl", "pixel_decoder") == \
+        "data/M2F_R50_MSDeformAttnPixelDecoder.pkl"
+    assert component_path("data/M2F_R50.pkl", "backbone") == "data/M2F_R50.pkl"
+
+
+def test_extracts_the_pixel_decoder_subtree(tmp_path):
+    got = extract_component(_ckpt(tmp_path, _full_senet_like()), "pixel_decoder")
+    assert set(got) == {"lateral_convs.adapter_1.weight",
+                        "output_convs.layer_1.weight",
+                        "transformer.layers.0.weight"}
+
+
+def test_pre_rename_decoder_keys_raise(tmp_path):
+    """A bare 'adapter*' key would be rewritten by models.py and then not match."""
+    p = _ckpt(tmp_path, {"encoder.pixel_decoder.adapter_1.weight": torch.randn(2, 2)})
+    with pytest.raises(EveSenetError) as exc:
+        extract_component(p, "pixel_decoder")
+    assert "pre-rename" in str(exc.value)
+
+
+def test_write_all_produces_both_files(tmp_path):
+    src = _ckpt(tmp_path, _full_senet_like())
+    out = os.path.join(str(tmp_path), "M2F_R50.pkl")
+    summary = write_all(src, out)
+    names = {c["component"]: c["out"] for c in summary["components"]}
+    assert set(names) == {"backbone", "pixel_decoder"}
+    assert all(os.path.isfile(p) for p in names.values())
+    assert names["pixel_decoder"].endswith("_MSDeformAttnPixelDecoder.pkl")
+    assert summary["checkpoint_sha256"]
+
+
+def test_unknown_component_raises(tmp_path):
+    with pytest.raises(EveSenetError):
+        extract_component(_ckpt(tmp_path, _full_senet_like()), "transformer_decoder")
