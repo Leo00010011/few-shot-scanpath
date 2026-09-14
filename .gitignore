@@ -22,6 +22,12 @@ __pycache__/
 # Subject-level gaze data and staged dataset artefacts (TechStack 6.5).
 # data/ holds osie_fixations_update_duration.json, the COCO fixation labels and
 # the per-dataset embeddings.npy -- none of it belongs in the repo.
+#
+# It also covers the three generated artefact trees -- data/eve_bridge/ (F2),
+# data/eve_senet/ (F3) and data/eve_features/ (F4, ~11.3 GB of .pth) -- including
+# their *_report.json records, which are re-derivable from a run and are data, not
+# the project record. Checked with `git check-ignore -v` rather than assumed, the
+# way the spec/ and SE-Net/configs/ negations above had to be learned twice.
 data/
 work/
 logs/

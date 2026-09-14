@@ -32,9 +32,15 @@ Concretely, three problems, in order of difficulty:
 
 **P1 — Data impedance mismatch.** *(solved 2026-09-08 — `tools/eve_bridge/`, Roadmap F2)*
 Our dataset lives in a separate repository behind its own dataloader. This repo consumes a rigid, flat
-JSON schema (`fixations.json`) plus precomputed per-image ResNet feature tensors. Coordinate space,
+JSON schema (`fixations.json`) plus precomputed ResNet feature tensors. Coordinate space,
 duration units, subject indexing, and stimulus resolution all differ and all silently corrupt metrics
 if mismatched. The bridge now converts, declares and asserts every one of them.
+
+*(Amended 2026-09-14, F4.)* The feature tensors are **per trial**, not per image: EVE presents each
+photograph at a per-trial display scale, so one tensor per `stimulus_name` cannot represent what
+every participant saw (Roadmap OPEN-6). Producing them required reading the bundle directly — a
+**declared deviation from D2**, contained to `tools/eve_prep/` and re-anchored to a bridge artefact
+by a cross-check that agrees on all 1804 trials. See [TechStack.md](TechStack.md) §3.9.
 
 **P2 — Subject alignment.**
 The model is *personalized*: prediction `i` is meaningful only when scored against ground truth from the
@@ -100,8 +106,9 @@ The end-to-end path for **eval-only inference with released checkpoints** (the m
                  feature_extractor  ▼                  ▼  subject embeddings
                         ┌────────────────────┐  ┌──────────────────────────┐
    PRECOMPUTED          │ image_features/    │  │ SE-Net forward pass over │
-   INPUTS               │   <img>.pth        │  │ a support set → user     │
-                        │ embeddings.npy     │  │ embedding .pt            │
+   INPUTS               │  <exp_key>.pth     │  │ a support set → user     │
+                        │  (PER TRIAL — F4)  │  │ embedding .pt            │
+                        │ embeddings.npy     │  │                          │
                         │ (task text emb.)   │  │ (or reuse released .pt)  │
                         └─────────┬──────────┘  └────────────┬─────────────┘
                                   │                          │
@@ -131,7 +138,19 @@ saliency maps, so that ground truth is derived from the scanpath itself, by the 
 `OSIE.__getitem__` already uses for training. It is what makes an NSS/CC/KLD block possible alongside
 the scanpath metrics; see the denominator warning in [TechStack.md](TechStack.md) §4.1.
 
-Stages B–E already exist and are to be *configured*, not rewritten. **Stage C is the exception, and
+Stages B–E already exist and are to be *configured*, not rewritten — with two exceptions.
+
+**Stage B is the first.** *(2026-09-14, F4.)* `feature_extractor.image_data()` cannot be pointed at
+our data: it globs `*.jpg` from a hardcoded `<dataset_path>/train/`, and it produces one tensor per
+image name, which OPEN-6 rules out. `tools/eve_prep/` *imports* the `ResNetCOCO` backbone unmodified
+and transcribes only the three-line transform chain — a transcription **proven bit-identical** to
+`image_data()` by `torch.equal`, not assumed. It writes one `(768, 2048)` tensor per
+`(stimulus, participant)` trial, keyed by `exp_key`, from the exact screen capture that participant
+saw. **Code complete and 74/74 tests green as of 2026-09-14; the extraction run itself is
+outstanding.** Note that Stage B shares nothing with Stage C — its backbone is torchvision's Mask
+R-CNN body, not SE-Net's encoder, so none of F3's detectron2 machinery applies.
+
+**Stage C is the second, and
 OPEN-2 settled it on 2026-09-10: we generate our own embeddings** rather than loading a released
 `*_user_embedding.pt`. The released tensor is `(10, 384)` and encodes OSIE subjects 10–14; it cannot
 address 38 participants, and borrowing it would sever P2's claim that prediction *i* is meaningful
@@ -143,7 +162,9 @@ MSDeformAttn install the project called its biggest risk ([TechStack.md](TechSta
 missing and zero unexpected state-dict keys, and the duration channel pinned dead by three
 bitwise-identical arms. Getting there needed two encoder init pickles that are distributed nowhere
 and a name translation between the checkpoint and detectron2 0.6 — neither changes a weight, both are
-recorded, and **F4 inherits both** (Roadmap F3, and the spec's `notes.md`). **The checkpoint is still OSIE-trained**: what transfers is the encoder, not the subjects, and
+recorded (Roadmap F3, and the spec's `notes.md`). **F4 was expected to inherit both and does not**:
+Stage B's backbone is a different network entirely, so the pickles and the name shim are Stage C's
+alone (corrected 2026-09-14). **The checkpoint is still OSIE-trained**: what transfers is the encoder, not the subjects, and
 F7 must say so — that is what remains of the open scientific question recorded in
 [Roadmap.md](Roadmap.md).
 
@@ -151,8 +172,12 @@ F7 must say so — that is what remains of the open scientific question recorded
 `gt_heatmaps.h5`, `subject_id_map.json`, 877 stimulus `.jpg`s and `bridge_report.json` for a cohort
 of **38 participants — 354 scored stimuli (1062 cells at 3 subjects per image), 523 support stimuli,
 1804 trials** — all validator invariants passing, including the uniform-subject-count check. The EVE
-`test*` participants carry no valid trials, so the cohort comes from `train*` / `val*`. Stages B, C
-and D are unblocked; F4 still waits on **OPEN-6** (`stimulus_image_conflict = 925`).
+`test*` participants carry no valid trials, so the cohort comes from `train*` / `val*`.
+
+**OPEN-6 is resolved as of 2026-09-14 and no open decision blocks any stage.** F4 keys features by
+trial, so the 925 `stimulus_image_conflict`s have nothing left to contend over and the bridge's
+per-name `stimuli/*.jpg` export is simply unused downstream. What F5 waits on is F4's extraction
+**run**, not its design.
 
 ---
 

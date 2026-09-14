@@ -50,8 +50,25 @@
 > **[notes.md](../2026-09-10-eve-subject-embeddings/notes.md)**; the two structural ones are in
 > [TechStack.md](TechStack.md) §3 items 4-5 and §1.3. **Read them before F4.**
 >
-> F4 still needs OPEN-6, now at 925 conflicts. F5 now blocks on F4 alone. F6 remains startable at any
-> time.
+> **F4 CODE COMPLETE 2026-09-14 — OPEN-6 resolved, and the last open decision with it.**
+> `tools/eve_prep/` keys features by **`exp_key`**, one tensor per `(stimulus, participant)` trial,
+> so the 925 conflicts have nothing left to contend over. **78/78 tests pass on Windows CPU**,
+> including the load-bearing **FR4.4 bit-identity** with upstream `image_data()` (`torch.equal`, not
+> `allclose`) and the **D4 cross-check agreeing on all 1804 trials** against an independent
+> `samples_df` derivation. The dev machine's own copy of the bundle meant Group 6 needed no cluster.
+> **78/78** after the run script was corrected against `EyeNet-Pipeline/whole_train.sh` — see
+> [TechStack.md](TechStack.md) §1.3's cluster facts 4–6, which **F5 inherits**.
+>
+> Two things F5 and F7 inherit. **F4 shares nothing with F3** — no detectron2, no MSDeformAttn, no
+> init pickles, no `module load CUDA`; the dependency table's "F4 (same encoder)" was simply wrong
+> and is corrected. And the per-trial **display-scale augmentation is visible in the features**,
+> with within-name cosine tracking the scale ratio monotonically (0.457–0.968, median 0.721, against
+> a cross-stimulus median of 0.382) — the quantitative statement OPEN-6 always lacked, and *not* the
+> flat `≥ 0.7` floor validation predicted.
+>
+> **What remains is the run**: ~11.3 GB for both splits (6.7 GB for `test` alone, which is all F5
+> needs), under `salloc`, with `bundle.h5` + `bundle/stimuli/` shipped by hand because `data/` is
+> git-ignored. F5 blocks on that run, not on F4's code. F6 remains startable at any time.
 
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
@@ -70,8 +87,8 @@
 | F1 | Reproduce the **OSIE** eval baseline on the cluster | ✓ **DONE** (2026-09-09) — accepted, gap flagged as **OPEN-7** | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ✓ **DONE** (2026-09-10) — 38 subjects, 1062 scored cells | — |
 | F3 | Subject embeddings for our subjects | ✓ **DONE** (2026-09-14) — ran at seeds 0 and 1, duration channel pinned, 0 missing / 0 unexpected keys | — |
-| F4 | Feature extraction for our stimuli | ⏸ TODO | **OPEN-6** |
-| F5 | Our-dataset eval branch + run script | ⏸ TODO | F4 (F3 ✓) |
+| F4 | Per-trial image features for our stimuli | ◐ **CODE COMPLETE** (2026-09-14) — 78/78 tests, **OPEN-6 resolved**; the extraction run is outstanding | — |
+| F5 | Our-dataset eval branch + run script | ⏸ TODO | F4's **run** (code ✓, F3 ✓) |
 | F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — the only unblocked feature; F1 produced its fixture | — |
 | F7 | Results write-up + validity statement | ⏸ TODO | F5, F6 |
 
@@ -96,9 +113,9 @@ Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸
              │                         │
       ┌──────┴────────┐                │
       ▼               ▼                │
- F4 features    OPEN-2 ✓─► F3 subj emb ▶│
-   ▲  │               │                │
-OPEN-6└───────┬───────┘                │
+ F4 features ◐  OPEN-2 ✓─► F3 subj emb ✓│
+      │               │                │
+OPEN-6 ✓ resolved ────┤                │
               ▼                        │
         F5 eval branch ────────────────┤
               │                        │
@@ -544,27 +561,75 @@ deviations from the authors' own load path.
 
 ---
 
-### F4 — Feature extraction for our stimuli ⏸
+### F4 — Per-trial image features for our stimuli ◐ CODE COMPLETE (2026-09-14) — the run is outstanding
 
-Depends on **OPEN-6** only (OPEN-5 resolved 2026-09-10). Scope: **877 images** — 354 scored plus
-523 support. OPEN-6 is correspondingly larger: `stimulus_image_conflict = 925`.
+Spec: [`spec/2026-09-14-eve-image-features/`](../2026-09-14-eve-image-features/)
+(requirements · plan · validation · **notes**). Implements Stage B; satisfies D4, D5, D7, D8;
+**declares a deviation from D2** (FR12). **Resolves OPEN-6.**
 
-- [ ] Resolve OPEN-6 — one `.pth` per `stimulus_name` cannot represent two different renderings of the
-      same image, and the bridge reports the conflict rather than choosing for us.
-- [ ] Point `feature_extractor.image_data()` at `<out_dir>/stimuli/` (note the hardcoded
-      `<dataset_path>/train/` subdirectory) and produce one `.pth` per image.
-- [ ] Confirm each tensor is `(768, 2048)`. Our 1920×1080 stimuli are **squashed**, not letterboxed,
-      by the 768×1024 resize — 16:9 into 4:3 (OPEN-4). Record it; it feeds F7.
-- [ ] Generate `embeddings.npy` containing the `"free-viewing"` key.
-- [ ] No further `jpg`-substring check is needed: the bridge already raises on any `stimulus_name`
-      containing `jpg` ([TechStack.md](TechStack.md) §3.2), and the validator re-checks it on the
-      written artefact.
+**Scope changed from 877 images to 1804 trials.** The unit is the `(stimulus, participant)` pair,
+not the stimulus name — that is what resolves OPEN-6, and it is what the whole feature is shaped
+around. 1804 tensors ≈ **11.3 GB** (`test` alone: 1062 ≈ 6.7 GB, sufficient for F5).
+
+- [x] **OPEN-6 resolved — by elimination, not by compromise** (§5). Features are keyed by
+      `exp_key`, so there is no longer one `.pth` per `stimulus_name` for two renderings to
+      contend over. The per-trial display scale is EVE's **deliberate augmentation** and is
+      preserved exactly: no crop, no rescale, no coordinate remapping.
+- [x] `tools/eve_prep/` — `trial_keys.py` (the `(name, subject) → exp_key` mapping, torch-free and
+      reused by F5), `extract_features.py` (the only torch importer), `check_features.py` (the
+      exit-code guard), plus `bash/extract_eve_features.sh` and `tests/eve_prep/`.
+- [x] **`ResNetCOCO` is imported unmodified** (convention 2); only the three-line transform chain is
+      transcribed, and **FR4.4 proves it bit-identical** to `feature_extractor.image_data()` by
+      `torch.equal`. `image_data()` itself is unusable here — it globs `*.jpg` from a hardcoded
+      `<dataset_path>/train/`, and staging 1804 PNGs as JPEGs would add a lossy re-encode to the one
+      thing that must be preserved exactly.
+- [x] **F4 shares nothing with F3 — the dependency table below was wrong.** Stage B's backbone is
+      torchvision's `maskrcnn_resnet50_fpn(...).backbone.body`; it has no weights, code or init
+      pickles in common with SE-Net's `ImageFeatureEncoder`. No detectron2, no MSDeformAttn, no
+      `align_stage_prefix()`, and **no `module load CUDA/11.6`** — nothing is compiled.
+- [x] Each tensor is `(768, 2048)` float32. The 1920×1080 → 1024×768 resize is a **non-uniform
+      squash**, x = 0.5333 / y = 0.7111 — a **third** distortion alongside F5's 512×384 metric screen
+      (OPEN-4) and F3's SE-Net 512×320 input. Recorded in `feature_report.json`; F7 states all three.
+- [x] `embeddings.npy` **copied** byte-identical from the OSIE branch and verified on the
+      destination (`"free-viewing"`, `(768,)` float32, sha equal). `text_data()` is never called.
+- [x] **The D4 gate is green on the real bundle**: `crosscheck_exp_keys()` agrees on **all 1804**
+      trials against an independent `samples_df` derivation, 1804 distinct exp_keys, 1062 test /
+      742 train, dense ids exactly `0..37`. Shown non-vacuous by corrupting a row.
+- [x] **78/78 pytest tests pass** on Windows CPU (`--bundle-dir` supplied from the dev machine's own
+      copy of the bundle, so Group 6 needed no cluster). No tracked file under `ISP/` or `SE-Net/`
+      modified (D1, convention 2).
+- [x] **The run script follows the cluster's established staging pattern** — corrected after
+      reading `~/projects/EyeNet-Pipeline/whole_train.sh`, which contradicted four of its
+      assumptions: the bundle is staged from a tar on beegfs to **`$LOCAL_SCRATCH`** (1804 random
+      PNG reads do not belong on the network filesystem), F4 needs **its own tar** of
+      `bundle.h5` + `stimuli/` and **not** `face_crops/` (11 GB it never opens), `conda activate
+      scanpath` needs **`my_env.ext4` mounted** first (non-fatal, as `test_osie.sh` has it), and
+      `conda.sh` must be sourced by **explicit path** rather than `$(conda info --base)`. All four
+      are now in [TechStack.md](TechStack.md) §1.3 as cluster facts 4–6, since **F5 inherits them**.
+- [ ] **The extraction run itself**, under `salloc`. Build the tar once on the login node
+      (`tar -cf $HOME/projects/bundle_stimuli.tar bundle/bundle.h5 bundle/stimuli`) and ship F2's
+      artefacts by hand — `data/` is git-ignored, so nothing under it arrives by `git pull`
+      (F3's lesson; the script's preconditions fail loudly on it).
+- [ ] Validation Group 7's four deliberate failure runs, the `FORCE_FEATURES=1` determinism check,
+      and the Data Validity block against the extracted cache.
+
+**The one stated expectation that did not hold, and it is informative.** Validation predicted that
+two participants' tensors for the same photograph would sit at cosine **≥ 0.7**. Measured over 20
+multi-viewer stimuli the within-name cosine runs **0.457–0.968 (median 0.721)**, with 9 of 20 below
+0.7 — and its value tracks the **display-scale ratio** almost monotonically (scale 1.004 → 0.968;
+scale 1.117 → 0.457). A flat floor was the wrong shape for the prediction: the similarity is a
+*function of the scale difference*. The two things OPEN-6 actually needs both hold decisively — no
+pair is bit-identical, and within-name beats cross-name on the medians **0.721 vs 0.382**. This is
+the quantitative statement about the augmentation that OPEN-6 always lacked, and it is **F7's to
+quote**. Sparsity also ran above its stated band (0.752–0.858 vs "roughly 0.3–0.8"), far below the
+0.95 investigate threshold. See the spec's [notes.md](../2026-09-14-eve-image-features/notes.md).
 
 ---
 
 ### F5 — EVE eval branch + run script ⏸
 
-Depends on F3 and F4 (OPEN-5 resolved 2026-09-10). Implements Stage D+E for our data; satisfies
+Depends on F3 ✓ and **F4's extraction run** (F4's code is complete; OPEN-5 and OPEN-6 both
+resolved). Implements Stage D+E for our data; satisfies
 D1, D3, D4, D5, D8. Cohort: `--subject_num 3`, **354 scored stimuli / 1062 cells**, 38 participants,
 `--num_fewshot 10`. Retrieval **computed and reported separately** from the paper-comparable block.
 
@@ -572,6 +637,16 @@ D1, D3, D4, D5, D8. Cohort: `--subject_num 3`, **354 scored stimuli / 1062 cells
       `utils/evaltools/*` **copied verbatim** (D1). The branch consumes the bridge's *artefacts*, not
       its code — the one exception is `tools/eve_bridge/heatmap_metrics.score_step_heatmaps()`, which
       F5 imports directly.
+- [ ] **Load one feature tensor PER TRIAL, not per image name** (F4 spec FR10.1). Upstream loads
+      one `.pth` per `img_name` and appends *that same tensor* once per subject; the EVE branch must
+      move the `torch.load` **inside** the subject loop and key it by `exp_key`:
+      `join(self.feature_dir, exp_key + ".pth")` — by **concatenation**, never
+      `str.replace('jpg','pth')`. The per-`(image, subject)` slot already exists in the batch, so
+      this changes nothing the evaluator sees: `imgid_to_sub`, `__len__` over images, the uniform
+      3-subjects-per-image count, the positional diagonal and the retrieval block are all untouched.
+      Load `exp_key_of` **once at construction** via `tools/eve_prep/trial_keys.load_trial_exp_keys()`
+      (torch-free), not per `__getitem__`. Assert `feature_report.json`'s `fixations_sha256` against
+      our own `fixations.json`, and **do not use `data/eve_bridge/stimuli/`** (OPEN-6, FR11.4).
 - [ ] Adapt only: `dataset/dataset.py` (class name, `origin_size`, subject handling) and `src/test.py`
       (pass `origin_size=(1080, 1920)` explicitly — the default `(600, 800)` would silently mis-scale
       every coordinate — set `--subject_num` to our unseen-subject count, remove or parameterise the
@@ -786,7 +861,39 @@ No frozen code was touched (D1 intact) and no bundle re-export was needed.
 The superseded frontier is still reproducible by
 `py -m pytest tests/eve_bridge -m bundle --bundle-dir <dir> -s -k feasibility`.
 
-### OPEN-6 — The same `stimulus_name` renders differently per participant *(blocks F4)*
+### ~~OPEN-6~~ — The same `stimulus_name` renders differently per participant ✓ RESOLVED 2026-09-14: **key features per trial**
+
+**Resolved by elimination.** Features are keyed by **`exp_key`**, one tensor per
+`(stimulus, participant)` trial, so there is no longer one `.pth` per `stimulus_name` for two
+renderings to contend over. The conflict is removed rather than adjudicated.
+
+**The premise was also narrower than it looked, and measuring it is what settled the decision.**
+EVE presents each photograph **centred on a cream `RGB(245,240,210)` page at a per-trial display
+scale**. Across 60 multi-viewer stimuli the within-name scale ratio is a **median 1.175, max
+1.358**, with aspect constant to 0.3 % and the panel centred at `(959.5 ± 2, 540.5 ± 3)` in every
+one of a 200-trial sample. The "correlation ≈ 0.70" recorded below is photo-against-background at
+displaced pixels — not different content, and not a brightness or crop difference.
+
+**The decision: the scale variation is a deliberate augmentation by the EVE team and is preserved
+exactly.** No crop, no rescale, no coordinate remapping. `fixations.json` coordinates stay in
+native screen space and stay correct, because the screen capture and the fixations share one
+coordinate frame — which is precisely why no remapping is needed.
+
+**Cost:** a declared deviation from **D2** (F4 spec FR12) — F4 reads `bundle.h5` directly, since
+the bridge's one-`.jpg`-per-name export structurally cannot carry per-trial captures. Contained to
+`tools/eve_prep/`, with every bundle read re-anchored to a bridge artefact by a cross-check that
+**agrees on all 1804 trials**. And 1804 tensors ≈ 11.3 GB instead of 877 ≈ 5.5 GB.
+
+`stimulus_image_conflict = 925` is now a property of the bridge's **unused** `stimuli/*.jpg`
+export, not of anything F5 consumes. F5 must not use that directory; a test greps for it.
+
+**F7 inherits a number OPEN-6 never had**: the augmentation is visible in the features, and the
+within-name cosine tracks the scale ratio almost monotonically — 0.457 at ratio 1.117, 0.968 at
+ratio 1.004, median 0.721 against a cross-stimulus median of 0.382. See F4's
+[notes.md](../2026-09-14-eve-image-features/notes.md) §2.
+
+#### The original finding, retained
+
 Raised 2026-09-08 alongside OPEN-5; **rescaled 2026-09-10**. On the realised 38-participant cohort
 `stimulus_image_conflict == 925` across 877 exported stimuli — i.e. essentially **all** of them.
 (The original figure of 13 was measured on the 2-subject cohort and understated the scale, not the
@@ -796,11 +903,11 @@ per channel, 24–72 % of pixels differing, whole-image correlation ≈ 0.70 on 
 Recognisably the same photograph, differently rendered — a brightness/scale/crop difference, not
 encoding noise.
 
-The bridge keeps the first exp_key's image in sorted order and counts the collision. But F4 produces
-one `.pth` per `stimulus_name`, which cannot represent two renderings — so the participant whose
-rendering was discarded gets scored against features of an image they did not see. Decide before F4
-whether to pick one rendering, key features per (stimulus, participant), or treat the divergence as a
-defect in the bundle export.
+The bridge keeps the first exp_key's image in sorted order and counts the collision. But a design
+producing one `.pth` per `stimulus_name` cannot represent two renderings — so the participant whose
+rendering was discarded would get scored against features of an image they did not see. The three
+options were: pick one rendering, key features per (stimulus, participant), or treat the divergence
+as a defect in the bundle export. **The second was taken**, 2026-09-14 — see above.
 
 ### OPEN-7 — F1 lands consistently ~1 % below the published OSIE row *(does not block; colours F7)* ◀ NEW
 Raised and **accepted** 2026-09-09 at F1's close. Against the paper's **n = 10, ISP-SENet** row:
@@ -845,7 +952,7 @@ reproduction ran ~1 % low to begin with.
 | ~~Detectron2~~ | source install, v0.6 — **obtained 2026-09-14**, non-editable from shared storage (TechStack §1.3) | ~~F3~~ ✓ |
 | ~~MSDeformAttn~~ | `SE-Net/src/pixel_decoder/ops/make.sh` — **built 2026-09-14** with `FORCE_CUDA=1` (TechStack §1.3) | ~~F3~~ ✓ |
 | CUDA toolkit for compiling | `module load CUDA/11.6` — **not** 12.4, and absent from `PATH` by default | F3 ✓, any future extension build |
-| SE-Net encoder init pickles — `data/M2F_R50.pkl`, `data/M2F_R50_MSDeformAttnPixelDecoder.pkl` | **distributed nowhere** — not in the repo, the checkpoint bundle, or the READMEs' Drive folders. **Derived from the released checkpoint** by `tools/eve_senet/make_backbone_init.py` (2026-09-14); `ImageFeatureEncoder` strict-loads both with their `os.path.exists` guards commented out, so a missing one is fatal (TechStack §3 item 4) | F3 ✓, F4 (same encoder) |
+| SE-Net encoder init pickles — `data/M2F_R50.pkl`, `data/M2F_R50_MSDeformAttnPixelDecoder.pkl` | **distributed nowhere** — not in the repo, the checkpoint bundle, or the READMEs' Drive folders. **Derived from the released checkpoint** by `tools/eve_senet/make_backbone_init.py` (2026-09-14); `ImageFeatureEncoder` strict-loads both with their `os.path.exists` guards commented out, so a missing one is fatal (TechStack §3 item 4) | F3 ✓ **only** — *not* F4. Corrected 2026-09-14: Stage B's backbone is torchvision's `maskrcnn_resnet50_fpn(...).backbone.body` and shares no weights, code or init files with SE-Net's `ImageFeatureEncoder` (F4 spec FR1.1) |
 | ~~`stsb-roberta-base-v2`~~ | ~~sentence-transformers hub~~ — **not needed**: every branch ships `embeddings.npy`, `text_data()` is never called, and `bash/test_osie.sh` stubs the import (TechStack §1.1) | ~~F1~~, F4 only if regenerating |
 | Mask R-CNN R50-FPN COCO weights | torchvision download — **obtained 2026-09-09** (Stage B ran) | ~~F1~~ ✓, F4 |
 | `evedataset` wheel + `bundle.h5` | `eve_shared/EveDataset/` (installed, git-ignored) | F2 |

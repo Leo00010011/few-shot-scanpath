@@ -202,7 +202,9 @@ unusable pip section — precisely the combination that produces a confusing fai
 | resolved stack | python 3.8.0 · torch 1.11.0 (cu113) · torchvision 0.12.0 · numpy 1.23.5 · scipy 1.10.0 · timm 0.6.13 · detectron2 0.6 · MSDeformAttn 1.0 |
 | built on | the **login node** (`hpc-login2`), verified on `hpc-gpu3` |
 
-#### Three cluster facts that are not obvious and cost the most time
+#### Cluster facts that are not obvious and cost the most time
+
+*(Three when F3 wrote this; six as of F4 — the last three are below.)*
 
 1. **`/mnt/imagenes/<user>/` is NOT visible from the compute nodes.** The env was first built at
    `/mnt/imagenes/leonardo.ulloa/senet` and `conda activate` on the GPU node returned
@@ -220,7 +222,46 @@ unusable pip section — precisely the combination that produces a confusing fai
 3. **There is no `nvcc` on the compute nodes, and none on `PATH` by default anywhere.** CUDA comes
    from the module system: `module avail` offers **`CUDA/11.6`** and `CUDA/12.4`.
 
-#### A fourth, found on F3's first run attempt (2026-09-14): `set -u` vs `conda activate`
+#### A fourth, and a fifth: staging bulk read data, and mounting the env image ◀ 2026-09-14 (F4)
+
+Both found by reading `~/projects/EyeNet-Pipeline/whole_train.sh` — another of our
+projects on this cluster, against the same EVE bundle — *after* F4's run script was
+written, and it contradicted what that script assumed.
+
+**Bulk read-only data goes to `$LOCAL_SCRATCH`, staged from a tar on beegfs.**
+`whole_train.sh` rsyncs `bundle_chunk.tar` to `$LOCAL_SCRATCH/data/`, extracts it, and
+points the run at `${LOCAL_SCRATCH}/data/bundle`. Its config template gives the reason
+in as many words: *"data paths point at the rsync'd local-scratch copy, not the shared
+eve_shared mount, to keep training I/O off the network filesystem."*
+
+**This is not a contradiction of fact 2 above, and the difference is the whole point.**
+Fact 2 says `/tmp` is node-local and therefore ruinous for anything that must
+**persist** — an env, a source tree, an artefact, a D5 record. A **read-only data copy
+re-staged per job** is exactly what node-local scratch is *for*. The rule is: stage
+inputs to scratch, write outputs to beegfs. `bash/test_osie.sh` already had the shape
+of this (`LOCAL_SCRATCH="${LOCAL_SCRATCH:-/tmp/${USER:-osie}}"` for its Stage B symlink
+farm); F4 makes it load-bearing, because it reads 1804 PNGs of ~1.3 MB at random.
+
+**Take only what you read.** The bundle is `bundle.h5` (0.23 GB) + `stimuli/` (4.0 GB)
++ `face_crops/` (11 GB). F4 opens only the first two — `get_stimulus()` resolves
+`samples_df`'s `stimulus_path` (`"stimuli/<exp_key>.png"`) against the bundle dir —
+so it builds its **own** tar rather than reusing EyeNet's, which is built for
+`get_face_crop()`. Staging the wrong one moves 11 GB nothing reads.
+
+**`conda activate scanpath` needs `my_env.ext4` mounted first.** The `scanpath` env
+lives inside an ext4 image: `cd "$HOME_DIR" && sudo mount_image.py my_env.ext4 --rw`.
+It must be **non-fatal** — under the interactive `salloc` path a script runs several
+times in one allocation, and the second mount exits non-zero, which `set -e` turns
+into an abort before any precondition runs. `conda activate` is the real check.
+**The `senet` env needs no mount** (it is a plain beegfs prefix), which is why
+`bash/embed_eve_subjects.sh` has none and the omission looks reasonable when copied.
+
+**Source `conda.sh` by its explicit path**, `"$HOME_DIR/miniconda3/etc/profile.d/conda.sh"`
+— not `$(conda info --base)`. Before any env is active, `conda` need not be on `PATH`
+at all, so the substitution fails before the `source` does. `test_osie.sh` and
+`whole_train.sh` both spell it out.
+
+#### A sixth, found on F3's first run attempt (2026-09-14): `set -u` vs `conda activate`
 
 The `senet` env ships `etc/conda/activate.d/libblas_mkl_activate.sh`, which **reads**
 `MKL_INTERFACE_LAYER` before assigning it. Under `set -euo pipefail` — which every run script in
@@ -492,6 +533,39 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
 - Its tests: `py -m pytest tests/eve_senet -q` (70 tests). The `bridge`-marked ones read the real
   `data/eve_bridge/` artefacts and **skip** when absent — that directory is git-ignored, so a fresh
   checkout has none.
+- **The F4 per-trial feature run (Stage B)**, from the repo root on the cluster, in the **ISP-side**
+  env (`scanpath`) — **not** `senet`, and **no `module load CUDA`**: nothing here is compiled.
+  ```
+  salloc --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=06:00:00
+  bash bash/extract_eve_features.sh            # SPLIT=both, ~11.3 GB
+  SPLIT=test bash bash/extract_eve_features.sh # the 1062 scored trials only, ~6.7 GB
+  ```
+  **`bash script`, never `source`** — same `-euo pipefail` reason as F1 and F3. Tunables:
+  `HOME_DIR`, `PROJECT_DIR`, `ISP_ENV`, `BUNDLE_DIR`, `BRIDGE_DIR`, `OUT_DIR`, `SPLIT`,
+  `FORCE_FEATURES`, `OSIE_EMB`. The order is preconditions → activate → version probe → guarded
+  extraction → post-check, and the first, third and fifth gate on **exit codes**. `SPLIT=test` is
+  sufficient for F5: `test.py` never builds a train-split loader (§3.6).
+
+  **Build F4's bundle tar once, on the login node**, then let the script stage it:
+  ```
+  tar -cf $HOME/projects/bundle_stimuli.tar bundle/bundle.h5 bundle/stimuli
+  ```
+  **`bundle.h5` + `stimuli/` only — never `face_crops/`** (11 GB F4 never opens; §1.3). The script
+  rsyncs the tar to `$LOCAL_SCRATCH` and extracts it there, keeping 1804 random PNG reads off the
+  network filesystem; `STAGE_BUNDLE=0` opts out and uses `BUNDLE_DIR` as-is. `data/` is git-ignored,
+  so F2's `fixations.json` / `gt_heatmaps.h5` / `subject_id_map.json` / `bridge_report.json` still
+  have to be shipped by hand — F3's lesson, and the script's preconditions fail loudly rather than
+  mid-run.
+  - `py tools/eve_prep/check_features.py --fix PATH --heatmaps PATH --feat-dir DIR [--split both]`
+    — the guard. Torch-only; it deliberately does **not** import `evedataset` or open the bundle, so
+    it runs before the bundle is staged. JSON on stdout, `0` = complete / `1` = incomplete.
+  - `py tools/eve_prep/extract_features.py --bundle-dir DIR --bridge-dir DIR --out-dir DIR
+    [--split both|test|train] [--overwrite] [--cuda 0]`. `--allow-cpu` is required to bypass the
+    CUDA check, so a silently CPU-bound run cannot be mistaken for a normal one.
+- Its tests: `py -m pytest tests/eve_prep -q` (74 tests). `bundle`-marked ones need
+  `--bundle-dir <EveDataset/bundle>`; `bridge`-marked ones need `data/eve_bridge/`. Both **skip**
+  when absent. The FR4.4 bit-identity test is unmarked and runs everywhere — it is the assertion
+  that licenses the transcribed preprocessing chain (§3.9).
 
   > **Run each test directory in its own invocation.** `tests/eve_bridge`, `tests/osie_prep` and
   > `tests/eve_senet` each carry a `conftest.py` that its own modules import by bare name
@@ -550,6 +624,12 @@ few-shot-scanpath/
 │   └── aggregate_seeds.py          #   FR13.3 seed-sweep pooling + GENERATED run record
 │                                   #   (--report). stdlib only. Added 2026-09-09; see §3.5b
 │
+├── tools/eve_prep/                 # ◀ Stage B — OUR code. CPU dev / GPU run. Added 2026-09-14 (F4)
+│   ├── __init__.py                 #   EvePrepError + the (768,2048)/(768,1024)/(1080,1920,3) shapes
+│   ├── trial_keys.py               #   (name, subject) -> exp_key; NO torch, reused by F5
+│   ├── extract_features.py         #   THE only torch importer; per-trial features + the report
+│   └── check_features.py           #   preflight; exit code drives the guard. No evedataset import
+│
 ├── tools/eve_senet/                # ◀ Stage C — OUR code. CPU dev / GPU run. Added 2026-09-10 (F3)
 │   ├── __init__.py                 #   EveSenetError
 │   ├── check_env.py                #   FR1.4 preflight AND FR1.5 versions.txt, one source
@@ -560,10 +640,12 @@ few-shot-scanpath/
 │
 ├── bash/test_osie.sh               # ◀ OUR code. The single sbatch script for F1
 ├── bash/embed_eve_subjects.sh      # ◀ OUR code. The single run script for F3
+├── bash/extract_eve_features.sh    # ◀ OUR code. The single run script for F4
 │
 ├── tests/eve_bridge/               # pytest, CPU. `[bundle]`-marked tests need --bundle-dir
 ├── tests/osie_prep/                # pytest, CPU. Self-contained fixtures, no cluster data
 ├── tests/eve_senet/               # pytest, CPU. `bridge`-marked tests need data/eve_bridge/
+├── tests/eve_prep/                 # pytest, CPU. `bundle`-marked need --bundle-dir; `bridge` as above
 │
 ├── weights/                        # released checkpoints (git-ignored: *.pt, *.pth)
 │   ├── OSIE-.../OSIE/{checkpoint_best.pth, ckp_11999.pt,
@@ -632,6 +714,13 @@ Loader behaviour to be aware of:
   ImageNet normalisation, output flattened to `(H*W, 2048)` = `(24*32, 2048)` = `(768, 2048)`.
 - `feature_extractor.image_data()` reads from `<dataset_path>/train/` — a hardcoded subdirectory; adapt or
   symlink rather than editing if avoidable.
+
+> **The EVE path never performs that `str.replace`** *(added 2026-09-14, F4)*. Its features are keyed
+> by `exp_key`, one per **trial**, and the path is built by **concatenation** —
+> `join(feature_dir, exp_key + ".pth")` — so the unanchored replace has nothing to bite on.
+> `exp_key_filename()` additionally *raises* on any key containing `jpg` or outside `[A-Za-z0-9_]+`,
+> and a test walks the AST of `tools/eve_prep/` for any `<expr>.replace("jpg", ...)` call. All 1804
+> realised exp_keys satisfy both rules. See §3.9.
 
 ### 3.3 Task embeddings
 - `src/data/embeddings.npy` — a pickled `dict[str, np.ndarray]`, loaded with `allow_pickle=True).item()`.
@@ -950,6 +1039,71 @@ upstream (working convention 2 — additive over invasive; `SE-Net/` is untouche
    encoder runs on its initialisation while producing embeddings that look entirely normal — which
    is why `load_model()` now raises on any remaining unexpected `.backbone.` key rather than
    trusting the shim. Nothing under `SE-Net/` is edited (convention 2).
+
+---
+
+### 3.9 EVE per-trial image features (Stage B output, added 2026-09-14)
+
+`tools/eve_prep/extract_features.py` writes three things into `--out-dir`
+(`data/eve_features/` under the run script). F5 consumes the artefacts, never the code — except
+`trial_keys.load_trial_exp_keys()`, which F5 imports (it is torch-free by design).
+
+| artefact | consumer | contract |
+|---|---|---|
+| `image_features/<exp_key>.pth` | **F5's `--feat_dir`** | `torch.float32` tensor `(768, 2048)`, `torch.save`d, CPU. **One per TRIAL**, not per stimulus name — 1804 files ≈ 11.3 GB (`test` alone: 1062 ≈ 6.7 GB). Written to a `.tmp` sibling then `os.replace`d, so an interrupted run leaves nothing loadable. |
+| `embeddings.npy` | F5 | A **byte-identical copy** of `ISP/OSIE/GazeformerISP/src/data/embeddings.npy`, verified on the *destination*: loads to a dict, carries `"free-viewing"`, value `(768,)` float32, `sha256(src) == sha256(dst)`. Using the file F1 scored with is what keeps F1's baseline and F5's run comparable on this input. |
+| `feature_report.json` | F5, F7 | Resolved args, `versions` (+ `device`), `fixations_sha256`, `n_trials{,_test,_train}`, `n_extracted` / `n_skipped_existing`, `feature_shape`, `resize_input`, `squash`, `keying`, `embeddings`, `exp_key_crosscheck`, every D7 counter (always present, `0` when nothing fired), and `feature_sha256` — one entry per tensor. Written **unconditionally**, including when the cache was already complete (D5). |
+
+**The keying is the whole point, and it is what resolves OPEN-6.** `<exp_key>` is used verbatim with
+`.pth` appended, so F5 builds `join(feature_dir, exp_key + ".pth")` by **concatenation** and the
+unanchored `str.replace('jpg','pth')` of §3.2 never runs on this path. `exp_key_filename()` raises on
+any key containing `jpg` or outside `[A-Za-z0-9_]+`; all 1804 realised keys satisfy both.
+
+Six properties that matter downstream:
+
+- **`gt_heatmaps.h5` is the AUTHORITY for `(name, subject) → exp_key`; `samples_df` is the CHECK.**
+  The store was written by the same code path that wrote `fixations.json` and is hash-bound to it.
+  `load_trial_exp_keys()` reads `trials/{trial_key,exp_key}` **only** — never `trials/heatmaps`, ~88 MB
+  it has no use for, which is also why `GtHeatmapStore.load()` is not used. The independent
+  `samples_df` derivation is compared trial by trial and **agrees on all 1804**; a disagreement raises
+  with three distinguishable messages, because a trial only the store knows, a trial only the
+  derivation knows, and a trial the two map to different captures mean three different problems.
+  This is the D4 gate for Stage B: a mis-mapped trial hands a participant another participant's
+  screen and every metric still looks plausible.
+- **`trial_key` is split on the LAST `|`.** Stimulus names may contain anything; the subject id is
+  what must survive the parse.
+- **The squash is a THIRD distortion.** 1920×1080 → 1024×768 is non-uniform: x = 0.5333,
+  y = 0.7111. F5's metric screen is 512×384 (3.75 / 2.8125, OPEN-4) and F3's SE-Net input is
+  512×320 (0.2667 / 0.2963, §3.8). Three independent distortions; `feature_report.json` records this
+  one explicitly and **F7 must state all three**.
+- **The preprocessing chain is transcribed, and the transcription is PROVEN.** `ResNetCOCO` is
+  imported unmodified, but the three-line transform chain is copied because `image_data()` globs
+  `*.jpg` from a hardcoded `<dataset_path>/train/` while F4 holds uint8 arrays in memory. FR4.4 runs
+  both paths on one file and asserts `torch.equal` — exact equality, not `allclose`. The order
+  `to_tensor → resize → normalize` is load bearing: resizing a **float tensor** rather than a PIL
+  image is what upstream does and it selects a different interpolation path.
+- **F4 uses the ISP-side env and compiles nothing.** Stage B's backbone is torchvision's
+  `maskrcnn_resnet50_fpn(...).backbone.body`, which shares no weights, no code and no init pickles
+  with SE-Net's `ImageFeatureEncoder`. **No detectron2, no MSDeformAttn, no `M2F_R50.pkl`, no
+  `align_stage_prefix()`, and no `module load CUDA/11.6`.** The Roadmap's dependency table said "F4
+  (same encoder)"; that was wrong and is corrected. What F4 *does* inherit from §1.3 is the cluster
+  facts — beegfs not `/mnt/imagenes`, never `/tmp`, and the `set +u`-across-`conda activate` guard,
+  kept because `ISP_ENV` is a tunable even though `scanpath` has no MKL hook.
+- **This is a declared deviation from D2.** F4 reads `bundle.h5` and `bundle/stimuli/*.png` directly
+  through `evedataset`, because the bridge's one-`.jpg`-per-`stimulus_name` export structurally
+  cannot carry the per-trial captures. Contained to `tools/eve_prep/`: F5 consumes only
+  `image_features/*.pth` + `feature_report.json` and never touches the bundle, and every bundle read
+  is re-anchored to a bridge artefact by the cross-check above. The cluster must therefore hold
+  `bundle.h5` (0.24 GB) and `bundle/stimuli/` (4.28 GB for all 3095 PNGs), plus `evedataset`, `h5py`
+  and `pandas` in `ISP_ENV`.
+
+**The display-scale augmentation is visible in the features** *(measured 2026-09-14)*. Two
+participants' tensors for one photograph are never bit-identical, and their cosine tracks the
+per-trial display-scale ratio almost monotonically: **0.968 at ratio 1.004, 0.457 at ratio 1.117**,
+over 20 multi-viewer stimuli a range of **0.457–0.968, median 0.721**, against a cross-stimulus
+median of **0.382**. Validation predicted a flat `≥ 0.7` floor; that shape was wrong, since the
+similarity is a *function of the scale difference*. Sparsity (fraction of exact zeros) runs
+**0.752–0.858**, above the predicted 0.3–0.8 band and far below the 0.95 investigate threshold.
 
 ---
 
