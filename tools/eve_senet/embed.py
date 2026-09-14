@@ -20,6 +20,7 @@ CLI: see ``--help``, or ``bash/embed_eve_subjects.sh`` for the documented invoca
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -68,6 +69,97 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 # initialised (FR6.2, validation Group 4).
 MISSING_KEY_ALLOWLIST = ()
 NEVER_ALLOWLIST_PREFIX = "subject_predictor."
+
+# The detectron2 ResNet stage-naming shim. Established on the cluster 2026-09-14.
+#
+# The released SE-Net checkpoint stores its backbone as `encoder.backbone.stem.*` +
+# `encoder.backbone.stages.res{2..5}.*`, i.e. the stage modules sit under a registered
+# `stages` container. detectron2 **0.6**'s `build_resnet_backbone` registers them
+# directly instead, so the module it builds wants bare `res{2..5}.*`. Same 265
+# tensors, identical shapes, no structural difference whatsoever -- only the name.
+#
+# Left alone this breaks twice, once loudly and once quietly:
+#   * `ImageFeatureEncoder.__init__` strict-loads `cfg.MODEL.WEIGHTS` and raises;
+#   * `load_state_dict(ckp["model"], strict=False)` would then find all 260 stage
+#     keys *unexpected* and silently leave the backbone at its initialisation.
+# The second is the dangerous one -- it produces embeddings from a half-loaded
+# encoder that look entirely normal (FR11.6 is what catches it).
+#
+# So we translate names -- never values -- at our call site, and only in the
+# direction the *installed* detectron2 actually needs, so this stays correct under
+# the authors' own version too (convention 2: nothing under SE-Net/ is edited).
+STAGE_SEGMENT = "stages."
+
+
+# ------------------------------------------------------ detectron2 naming shim
+
+def align_stage_prefix(state, reference_keys, scope=""):
+    """Add or strip the ``stages.`` segment on backbone stage keys.
+
+    Returns ``(new_state, n_changed, direction)`` where direction is ``"add"``,
+    ``"strip"`` or ``"none"``. ``scope`` is the prefix the backbone sits under inside
+    ``state`` -- ``""`` for a bare backbone state dict, ``"encoder.backbone."`` for a
+    whole ``UserEmbeddingNet`` checkpoint.
+
+    The direction is decided by comparing ``state`` against ``reference_keys`` (the
+    target module's own ``state_dict()``), so this is a no-op when the installed
+    detectron2 already agrees with the checkpoint. Nothing but the key text changes.
+    """
+    staged = scope + STAGE_SEGMENT + "res"
+    bare = scope + "res"
+    ref_staged = any(k.startswith(staged) for k in reference_keys)
+    state_staged = any(k.startswith(staged) for k in state)
+    if ref_staged == state_staged:
+        return dict(state), 0, "none"
+
+    out, n = {}, 0
+    for k, v in state.items():
+        if ref_staged and k.startswith(bare):
+            k = scope + STAGE_SEGMENT + k[len(scope):]
+            n += 1
+        elif not ref_staged and k.startswith(staged):
+            k = scope + k[len(staged) - len("res"):]
+            n += 1
+        out[k] = v
+    if len(out) != len(state):  # a rename that collides is a silently dropped tensor
+        raise EveSenetError(
+            "align_stage_prefix: renaming collapsed {} keys into {} -- refusing to "
+            "drop a backbone tensor".format(len(state), len(out)))
+    return out, n, "add" if ref_staged else "strip"
+
+
+@contextlib.contextmanager
+def backbone_name_shim(counters):
+    """Make ``ImageFeatureEncoder``'s strict init load survive the naming difference.
+
+    Wraps ``src.models``'s imported ``build_backbone`` so the module it returns
+    translates incoming key names to its own convention before loading. The wrapper is
+    installed on the *module object* for the duration of construction and removed
+    afterwards; no file under ``SE-Net/`` is touched (convention 2).
+    """
+    from src import models as senet_models
+
+    real_build = senet_models.build_backbone
+
+    def shim(cfg):
+        backbone = real_build(cfg)
+        reference = list(backbone.state_dict())
+        original_load = backbone.load_state_dict
+
+        def load(state, strict=True):
+            aligned, n, direction = align_stage_prefix(state, reference)
+            counters["backbone_init_keys_renamed"] = n
+            counters["backbone_init_rename_direction"] = direction
+            return original_load(aligned, strict=strict)
+
+        backbone.load_state_dict = load
+        return backbone
+
+    senet_models.build_backbone = shim
+    try:
+        yield
+    finally:
+        senet_models.build_backbone = real_build
 
 
 # --------------------------------------------------------------------------- utils
@@ -144,9 +236,9 @@ def assert_stimuli_exist(selection, image_dir):
 def load_model(config_path, checkpoint, device, allow_missing=()):
     """Construct ``UserEmbeddingNet`` and load the released weights (FR6).
 
-    Returns ``(model, hparams, missing_keys, unexpected_keys)``. Raises on any missing
-    key outside ``MISSING_KEY_ALLOWLIST + allow_missing``, and unconditionally on any
-    ``subject_predictor.*`` key (FR6.2/FR11.6).
+    Returns ``(model, hparams, missing_keys, unexpected_keys, shim_counters)``. Raises
+    on any missing key outside ``MISSING_KEY_ALLOWLIST + allow_missing``, and
+    unconditionally on any ``subject_predictor.*`` key (FR6.2/FR11.6).
     """
     from src.models import UserEmbeddingNet  # deferred: reaches Detectron2/MSDeformAttn
 
@@ -157,8 +249,10 @@ def load_model(config_path, checkpoint, device, allow_missing=()):
             "load_model: Model.embedding_dim is {} but ISP's subject_feature_dim is "
             "{} (FR7.3/FR11.8)".format(mp.embedding_dim, EMBEDDING_DIM))
 
-    model = UserEmbeddingNet(
-        pa,
+    shim = {}
+    with backbone_name_shim(shim):
+        model = UserEmbeddingNet(
+            pa,
         num_decoder_layers=mp.n_dec_layers,
         hidden_dim=mp.embedding_dim,
         nhead=mp.n_heads,
@@ -168,12 +262,26 @@ def load_model(config_path, checkpoint, device, allow_missing=()):
         train_pixel_decoder=tp.train_pixel_decoder,
         dropout=tp.dropout,
         dim_feedforward=mp.hidden_dim,
-        num_encoder_layers=mp.n_enc_layers,
-    ).to(device)
+            num_encoder_layers=mp.n_enc_layers,
+        ).to(device)
 
     ckp = torch.load(checkpoint, map_location=device)
-    missing, unexpected = model.load_state_dict(ckp["model"], strict=False)
+    # The same translation, now for the whole checkpoint: without it every stage key
+    # lands in `unexpected` and the backbone silently keeps its initialisation.
+    state, n_renamed, direction = align_stage_prefix(
+        ckp["model"], list(model.state_dict()), scope="encoder.backbone.")
+    shim["checkpoint_keys_renamed"] = n_renamed
+    shim["checkpoint_rename_direction"] = direction
+    missing, unexpected = model.load_state_dict(state, strict=False)
     missing, unexpected = list(missing), list(unexpected)
+
+    stage_unexpected = [k for k in unexpected if ".backbone." in k]
+    if stage_unexpected:  # the failure the shim exists to prevent, asserted not assumed
+        raise EveSenetError(
+            "load_model: {} backbone key(s) are still unexpected after the naming "
+            "shim, e.g. {}. The encoder would be left at its initialisation and every "
+            "embedding would come from a half-loaded backbone".format(
+                len(stage_unexpected), stage_unexpected[:5]))
 
     head = [k for k in missing if k.startswith(NEVER_ALLOWLIST_PREFIX)]
     if head:
@@ -192,7 +300,7 @@ def load_model(config_path, checkpoint, device, allow_missing=()):
             "construction arguments are wrong.".format(len(unexplained), unexplained))
 
     model.eval()  # FR6.4 -- no optimiser is ever constructed (D8)
-    return model, hparams, missing, unexpected
+    return model, hparams, missing, unexpected, shim
 
 
 def build_transform(im_h, im_w):
@@ -344,7 +452,7 @@ def build_embeddings(fixations_path, subject_map_path, report_path, image_dir,
             "build_embeddings: {} selected support stimuli also appear in the scored "
             "test split (FR2.2): {}".format(len(leaked), leaked[:10]))
 
-    model, hparams, missing, unexpected = load_model(
+    model, hparams, missing, unexpected, shim = load_model(
         config, checkpoint, device, allow_missing=allow_missing)
     pa = hparams.Data
     pa.image_path = image_dir  # read directly by Siamese_Triplet_Gaze.process_data
@@ -415,6 +523,7 @@ def build_embeddings(fixations_path, subject_map_path, report_path, image_dir,
         "task_emb_key": str(task_emb_key),
         "missing_keys": missing,                                   # FR6.2
         "unexpected_keys": unexpected,
+        "backbone_name_shim": shim,   # detectron2 stage-naming translation, see above
         "fixations_sha256": fixations_sha,
         "checkpoint_sha256": sha256_file(checkpoint),
         "embedding_sha256": sha256_file(emb_path),                 # FR8.2

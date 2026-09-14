@@ -63,6 +63,19 @@ mkdir -p "$SEED_DIR" logs
 python tools/eve_senet/check_env.py --versions "$SEED_DIR/versions.txt" \
     > "$SEED_DIR/check_env.json"
 
+# The backbone init file. SE-Net/src/models.py loads data/resnet50.yaml's
+# MODEL.WEIGHTS unconditionally and STRICTLY, and that pickle ships with neither this
+# repo nor the checkpoint bundle -- so without this, model construction dies with a
+# bare FileNotFoundError several frames inside SE-Net. It is initialisation only:
+# load_model() overwrites every backbone tensor from the same checkpoint immediately
+# afterwards, which is why deriving it from that checkpoint is sound. Generated once,
+# never overwritten (pass --force deliberately if you later obtain the real pickle).
+BACKBONE_INIT="${BACKBONE_INIT:-data/M2F_R50.pkl}"
+if [ ! -f "$BACKBONE_INIT" ]; then
+    echo "-- $BACKBONE_INIT absent; deriving it from $CKPT"
+    python tools/eve_senet/make_backbone_init.py         --checkpoint "$CKPT" --out "$BACKBONE_INIT"         > "$SEED_DIR/backbone_init.json"
+fi
+
 # FR8 -- stdout is teed because the report summary is printed, not logged.
 python tools/eve_senet/embed.py \
     --fixations   "$BRIDGE_DIR/fixations.json" \
