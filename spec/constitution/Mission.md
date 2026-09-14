@@ -1,7 +1,7 @@
 # Mission
 
 > Constitution file 1 of 3. Read together with [TechStack.md](TechStack.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-10
+> Last updated: 2026-09-14
 
 ---
 
@@ -137,7 +137,9 @@ OPEN-2 settled it on 2026-09-10: we generate our own embeddings** rather than lo
 address 38 participants, and borrowing it would sever P2's claim that prediction *i* is meaningful
 *because* it is personalised to subject *i*. `tools/eve_senet/` (F3) drives the released SE-Net
 checkpoint over each participant's own 10-shot support set and writes a `(38, 384)` tensor in dense-id
-order. **The checkpoint is still OSIE-trained**: what transfers is the encoder, not the subjects, and
+order. **The `senet` environment this needs — Detectron2 + MSDeformAttn, the install the project
+called its biggest risk — was built and verified green on 2026-09-14**
+([TechStack.md](TechStack.md) §1.3), so Stage C is now a matter of running it, not of paying for it. **The checkpoint is still OSIE-trained**: what transfers is the encoder, not the subjects, and
 F7 must say so — that is what remains of the open scientific question recorded in
 [Roadmap.md](Roadmap.md).
 

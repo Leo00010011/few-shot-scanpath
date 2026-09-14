@@ -1,7 +1,7 @@
 # Roadmap
 
 > Constitution file 3 of 3. Read together with [Mission.md](Mission.md) and [TechStack.md](TechStack.md).
-> Last updated: 2026-09-10
+> Last updated: 2026-09-14
 >
 > **F1 CLOSED 2026-09-09 — accepted with a flagged gap (OPEN-7).** The pipeline ran end to end, all
 > three seeds are computed, and the run record is generated from artefacts: SM **0.3704 ± 0.0041**,
@@ -24,10 +24,18 @@
 > out), so a large cohort scores fine at `subject_num = 3`. EVE caps subjects **per image** at
 > 2–4, not the cohort. See §5 OPEN-5 and the spec's `notes.md` §6.
 >
-> **F3 is code complete as of 2026-09-10** — `tools/eve_senet/`, 60/60 tests, OPEN-2 resolved
-> toward generating our own embeddings. It now blocks only on the `senet` env (Detectron2 +
-> MSDeformAttn) and a GPU. F4 still needs OPEN-6, now at 925 conflicts. F6 remains startable
-> at any time.
+> **F3's environment blocker is CLEARED as of 2026-09-14.** The `senet` env is built and
+> `check_env.py` reports **11/11 `ok`** on `hpc-gpu3` — Detectron2 0.6 and MSDeformAttn included, the
+> install [TechStack.md](TechStack.md) called the single biggest risk in the project. The recipe, the
+> five deviations from the pin table, and three cluster facts that cost a day (`/mnt/imagenes` is not
+> visible from compute nodes; `/tmp` is node-local; `nvcc` comes only from `module load CUDA/11.6`)
+> are recorded in **[TechStack.md](TechStack.md) §1.3**. **Read §1.3 before any cluster work** — F4
+> and F5 inherit all of it.
+>
+> F3 is otherwise code complete (2026-09-10, `tools/eve_senet/`, 60/60 tests, OPEN-2 resolved toward
+> generating our own embeddings) and now blocks only on **running it**: the empty
+> `MISSING_KEY_ALLOWLIST` and the GPU-side duration pin. F4 still needs OPEN-6, now at 925 conflicts.
+> F6 remains startable at any time.
 
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
@@ -45,7 +53,7 @@
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
 | F1 | Reproduce the **OSIE** eval baseline on the cluster | ✓ **DONE** (2026-09-09) — accepted, gap flagged as **OPEN-7** | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ✓ **DONE** (2026-09-10) — 38 subjects, 1062 scored cells | — |
-| F3 | Subject embeddings for our subjects | ◐ **CODE COMPLETE** (2026-09-10) — `tools/eve_senet/`, 60/60 tests; **not yet run** | the `senet` env (Detectron2 + MSDeformAttn) + a GPU |
+| F3 | Subject embeddings for our subjects | ▶ **RUNNABLE** — code complete (2026-09-10), `senet` env built and green (2026-09-14); **not yet run** | — (env cleared; `MISSING_KEY_ALLOWLIST` is resolved *during* the first run) |
 | F4 | Feature extraction for our stimuli | ⏸ TODO | **OPEN-6** |
 | F5 | Our-dataset eval branch + run script | ⏸ TODO | F3, F4 |
 | F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — the only unblocked feature; F1 produced its fixture | — |
@@ -72,7 +80,7 @@ Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸
              │                         │
       ┌──────┴────────┐                │
       ▼               ▼                │
- F4 features    OPEN-2 ✓─► F3 subj emb ◐│
+ F4 features    OPEN-2 ✓─► F3 subj emb ▶│
    ▲  │               │                │
 OPEN-6└───────┬───────┘                │
               ▼                        │
@@ -356,7 +364,7 @@ from images seen by 4 — routing it to support would put one name in both split
 
 ---
 
-### F3 — Subject embeddings for our subjects ◐ CODE COMPLETE (2026-09-10), not yet run
+### F3 — Subject embeddings for our subjects ▶ RUNNABLE — code complete 2026-09-10, env green 2026-09-14, not yet run
 
 Spec: [`spec/2026-09-10-eve-subject-embeddings/`](../2026-09-10-eve-subject-embeddings/)
 (requirements · plan · validation). Implements Stage C; satisfies D4, D5, D7, D8; constrained by D1.
@@ -427,11 +435,28 @@ Built 2026-09-10 (Windows CPU) — `tools/eve_senet/`, `SE-Net/configs/eve_usere
       `*.json` rule would have swallowed `eve_useremb.json`**, exactly the failure recorded for
       `paper_reference.json` (TechStack convention 5). Also added `*.so`, `**/ops/build/`, `*.egg-info/`
       for MSDeformAttn's compiler output.
-- [ ] **Build the `senet` env** from `SE-Net/environment.yml`, then **Detectron2 from source** and
-      **MSDeformAttn** (`sh SE-Net/src/pixel_decoder/ops/make.sh`) — the highest-risk install in the
-      project ([TechStack.md](TechStack.md) §1). `py tools/eve_senet/check_env.py` reports each as
-      `ok`/`FAIL` with its resolved version and gates the run on its exit code; on the dev machine it
-      correctly exits 1 (no CUDA, no timm, no Detectron2, no MSDeformAttn).
+- [x] **`senet` env built — 2026-09-14, `check_env.py` 11/11 `ok` on `hpc-gpu3`.** The highest-risk
+      install in the project is paid. **It is not the two-line install TechStack §1 described, and the
+      full recipe is [TechStack.md](TechStack.md) §1.3** — read it before any cluster work, F4 and F5
+      included. The four things that were not in the plan:
+      - **`/mnt/imagenes/<user>/` is not visible from the compute nodes.** The env was built there
+        first and `conda activate` failed on the GPU node. It was recovered with
+        `conda create --prefix <beegfs> --clone <old>`, and now lives at
+        `/mnt/beegfs/home/leonardo.ulloa/envs/senet`. `/tmp` is node-local too — an editable
+        `pip install -e /tmp/detectron2` leaves a `.pth` pointing at a path the next node cannot see.
+      - **`nvcc` exists nowhere on `PATH`; it comes from `module load CUDA/11.6`.** Not 12.4 — torch's
+        `cpp_extension` raises on a CUDA *major* mismatch against this env's cu113 torch and only warns
+        on a minor one, so the 11.6-vs-11.3 warning is the accepted outcome, not a defect to chase.
+      - **Both extensions must be compiled GPU-free**, because the fair-use policy forbids holding a
+        GPU for a compiler. `FORCE_CUDA=1` + `CUDA_HOME` + `TORCH_CUDA_ARCH_LIST="7.0+PTX"` (V100S =
+        `sm_70`). Without the arch list the build imports cleanly and dies at the first kernel launch;
+        without `FORCE_CUDA` **MSDeformAttn raises but detectron2 silently builds CPU-only**.
+      - **`opencv-python-headless`, not `opencv-python`** — the GUI wheel needs `libGL.so.1`, absent on
+        headless nodes. Five deviations from the pin table in total, tabulated in §1.3.
+
+      Still outstanding, and cheap: `check_env.py` green proves every module **imports**, not that a
+      CUDA kernel **launches**. Run §1.3's `collect_env | grep -i arch` and its `DeformConv` smoke test
+      once at the top of the first F3 allocation, before spending anything.
 - [ ] **Establish the missing-key allowlist.** `MISSING_KEY_ALLOWLIST` ships **empty** on purpose — an
       allowlist guessed in advance defeats the check it exists for. Run `load_model()` once, read the
       `missing_keys` it raises with, decide per key whether the checkpoint genuinely omits it, and record
@@ -744,9 +769,10 @@ reproduction ran ~1 % low to begin with.
 | ISP-SENet checkpoints | already in `weights/` (git-ignored) | F1, F5 |
 | ~~COCO-FreeView stimuli / fixation labels~~ | ~~staged on the cluster~~ | ~~F1~~ — dropped 2026-09-09, see §4 |
 | ~~OSIE stimulus images (800×600 `.jpg`)~~ | NUS-VIP repo — **obtained 2026-09-09**, staged flat at `$PROJECT_DIR/data/stimuli` (git-ignored) | ~~F1~~ ✓ |
-| Detectron2 | source install, per HAT repo | F3 (option 1 only) |
-| MSDeformAttn | `SE-Net/src/pixel_decoder/ops/make.sh` | F3 (option 1 only) |
+| ~~Detectron2~~ | source install, v0.6 — **obtained 2026-09-14**, non-editable from shared storage (TechStack §1.3) | ~~F3~~ ✓ |
+| ~~MSDeformAttn~~ | `SE-Net/src/pixel_decoder/ops/make.sh` — **built 2026-09-14** with `FORCE_CUDA=1` (TechStack §1.3) | ~~F3~~ ✓ |
+| CUDA toolkit for compiling | `module load CUDA/11.6` — **not** 12.4, and absent from `PATH` by default | F3 ✓, any future extension build |
 | ~~`stsb-roberta-base-v2`~~ | ~~sentence-transformers hub~~ — **not needed**: every branch ships `embeddings.npy`, `text_data()` is never called, and `bash/test_osie.sh` stubs the import (TechStack §1.1) | ~~F1~~, F4 only if regenerating |
 | Mask R-CNN R50-FPN COCO weights | torchvision download — **obtained 2026-09-09** (Stage B ran) | ~~F1~~ ✓, F4 |
 | `evedataset` wheel + `bundle.h5` | `eve_shared/EveDataset/` (installed, git-ignored) | F2 |
-| cluster allocation with an NVIDIA GPU | — (F1 ran on `hpc-gpu1`, env `scanpath`) | ~~F1~~ ✓, F3, F4, F5 |
+| cluster allocation with an NVIDIA GPU | — (F1 ran on `hpc-gpu1`, env `scanpath`; F3's env verified on `hpc-gpu3`. Nodes are **Tesla V100S-PCIE-32GB**, `sm_70`, driver 560.35.03, system gcc 8.5.0) | ~~F1~~ ✓, F3, F4, F5 |

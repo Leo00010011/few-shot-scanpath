@@ -1,7 +1,7 @@
 # Tech Stack
 
 > Constitution file 2 of 3. Read together with [Mission.md](Mission.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-10
+> Last updated: 2026-09-14
 
 ---
 
@@ -187,8 +187,138 @@ module-scope imports of `common/utils.py`, so a missing one is an `ImportError` 
 runs; neither was covered by the original nine probes, and `environment.yml` puts both *only* in the
 unusable pip section — precisely the combination that produces a confusing failure three steps later.
 
-### `senet` — SE-Net (subject embeddings, Stage C)
-Created from `SE-Net/environment.yml` — but **its pip section cannot be installed; see §1.2**.
+### 1.3 The `senet` env as actually built — and the cluster facts behind it ◀ 2026-09-14
+
+**Built and green on 2026-09-14.** `check_env.py` reports **11/11 `ok`** on `hpc-gpu3`, including
+`cuda_available: True` and the MSDeformAttn probe. F3's environment blocker is cleared. §1.2 said what
+*not* to do; this section says what was done, and records the cluster facts that cost a day to find.
+**F4, F5 and any future cluster work inherit all of them.**
+
+#### The env
+
+| | |
+|---|---|
+| prefix | **`/mnt/beegfs/home/leonardo.ulloa/envs/senet`** — activate by prefix if the name does not resolve |
+| resolved stack | python 3.8.0 · torch 1.11.0 (cu113) · torchvision 0.12.0 · numpy 1.23.5 · scipy 1.10.0 · timm 0.6.13 · detectron2 0.6 · MSDeformAttn 1.0 |
+| built on | the **login node** (`hpc-login2`), verified on `hpc-gpu3` |
+
+#### Three cluster facts that are not obvious and cost the most time
+
+1. **`/mnt/imagenes/<user>/` is NOT visible from the compute nodes.** The env was first built at
+   `/mnt/imagenes/leonardo.ulloa/senet` and `conda activate` on the GPU node returned
+   `EnvironmentLocationNotFound`. Do not be misled by `conda env list`: an *older* env
+   (`scanpath`) does appear there from both nodes, which is what made the path look shared.
+   **Everything the cluster must read — envs, source trees, data, artefacts — belongs under
+   `/mnt/beegfs/home/<user>/`,** which demonstrably is shared (miniconda3 itself lives there).
+   The recovery is `conda create --prefix <beegfs path> --clone <old path>`, run on the node that
+   *can* see the old path; `--clone` rewrites the hardcoded prefixes that a `cp -r` would leave
+   pointing at the old location.
+2. **`/tmp` is node-local.** A `pip install -e /tmp/detectron2` produces a `.pth` file pointing at a
+   path the next node cannot see, and the import fails there with no obvious cause. **Install
+   detectron2 non-editable from a shared path**, and never leave a `versions.txt` or any other
+   record in `/tmp` — it is gone with the allocation (D5).
+3. **There is no `nvcc` on the compute nodes, and none on `PATH` by default anywhere.** CUDA comes
+   from the module system: `module avail` offers **`CUDA/11.6`** and `CUDA/12.4`.
+
+#### Use `CUDA/11.6`, never `CUDA/12.4`
+
+Torch's `cpp_extension` **raises** on a CUDA *major*-version mismatch and only *warns* on a minor one.
+Against this env's cu113 torch, `CUDA/11.6` builds with an expected warning; `CUDA/12.4` is a hard
+failure. **The warning is the accepted outcome — it is not a defect to chase.** `module load
+CUDA/11.6` does not survive a new shell or a fresh allocation, so it belongs in every run script.
+
+#### Compiling without a GPU — required, because of the fair-use policy
+
+Holding a GPU for a compile is not acceptable here, and it is not necessary. Both extension builds
+gate on `torch.cuda.is_available()` and fail *differently* on a GPU-less node:
+
+- **MSDeformAttn raises** `NotImplementedError('No CUDA runtime is found. Please set FORCE_CUDA=1 …')`
+  — [`ops/setup.py:39-53`](../../SE-Net/src/pixel_decoder/ops/setup.py), whose own comment reads
+  *"Force cuda since torch ask for a device, not if cuda is in fact available."*
+- **detectron2 silently falls back to a CPU-only build.** `import detectron2` passes,
+  `from detectron2.layers import DeformConv` passes, and it dies only at the first kernel launch.
+  **A green import is not evidence that detectron2 has CUDA** — check `detectron2 arch flags` in
+  `python -m detectron2.utils.collect_env`.
+
+The three exports that fix both:
+
+```bash
+export FORCE_CUDA=1                      # past the availability gate in both setup.py files
+export CUDA_HOME=$(dirname $(dirname $(which nvcc)))
+export TORCH_CUDA_ARCH_LIST="7.0+PTX"    # V100S = sm_70; no GPU to autodetect from
+```
+
+`TORCH_CUDA_ARCH_LIST` is the one that is silently skipped and later expensive: without it, torch
+emits a generic arch list that may exclude the target GPU, and the result imports cleanly and then
+fails with *"no kernel image is available for execution on the device"*. **`+PTX` is deliberate** —
+it embeds forward-JITable PTX so a job scheduled onto a newer GPU generation still runs.
+
+#### The reproduction recipe
+
+Steps 1–2 are §1.2's (conda half only, then the pip four with `--no-deps`), with **one correction**
+below. Steps 3–4, on the **login node**:
+
+```bash
+module load CUDA/11.6
+conda activate /mnt/beegfs/home/leonardo.ulloa/envs/senet
+export FORCE_CUDA=1
+export CUDA_HOME=$(dirname $(dirname $(which nvcc)))
+export TORCH_CUDA_ARCH_LIST="7.0+PTX"
+
+cd <shared>/src/detectron2 && git checkout v0.6      # NOT /tmp, NOT -e
+pip install -c <shared>/src/senet_constraints.txt --no-build-isolation --no-deps .
+
+cd "$PROJECT_DIR/SE-Net/src/pixel_decoder/ops"
+rm -rf build/ *.egg-info/ && sh make.sh
+```
+
+Two notes on that block. **detectron2 needs a constraints file, not `--no-deps` alone** — it has
+~12 genuine runtime dependencies (fvcore, iopath, omegaconf, yacs, pycocotools …), and the honest
+way to let them install without moving numpy/scipy/torch is `-c` pinning those six. And
+`--no-build-isolation` is mandatory: with isolation pip builds in a sandbox without torch, and
+detectron2's `setup.py` imports torch to locate its CUDA sources.
+
+**The §1.2 correction: install `opencv-python-headless`, not `opencv-python`.** The GUI wheel links
+`libGL.so.1`, which headless compute nodes do not have, so `import cv2` dies at
+`cv2/__init__.py` bootstrap. The headless wheel exports the same `cv2` module minus the GUI
+functions. Safe here for a checkable reason, not by hope: the only four `cv2` calls in the tree are
+`filter2D`/`resize` inside `pyramid()` / `foveat_img()` ([`SE-Net/common/utils.py:709-738`](../../SE-Net/common/utils.py)),
+which F3 never calls — the import merely has to succeed.
+
+#### Deviations from the pin table (D5)
+
+| item | pin (§1.2 / `environment.yml`) | resolved | on F3's code path? |
+|---|---|---|---|
+| opencv | `opencv-python 4.7.0.72` | **`opencv-python-headless` 5.0.0** — a *major* version above the pin | **no** — `pyramid()`/`foveat_img()` only |
+| scikit-learn | `0.22.2` | **1.3.2** | **no** — `KFold` inside `fold_split()` only |
+| CUDA toolkit | implied 11.3 (torch is cu113) | **11.6**, build-time only | build only |
+| gcc | `gxx=9` named as the remedy | **system gcc 8.5.0 sufficed** — the remedy was not needed | build only |
+| detectron2 | "per the HAT repo" | **v0.6**, non-editable, from shared storage | yes |
+
+The two "no" rows are load-bearing, not excuses. Both packages are **module-scope imports of
+`common/utils.py`**, so they must *import*; neither's functions are reached. That is why the version
+is free — and why `check_env.py` probes them at all.
+
+#### What is NOT yet verified
+
+`check_env.py` green means every module **imports** on the GPU node. It does **not** prove a CUDA
+kernel launches. Two checks remain outstanding and should be run at the top of the first real F3
+allocation, before anything expensive:
+
+```bash
+python -m detectron2.utils.collect_env | grep -i arch     # expect sm_70 in the arch flags
+python -c "import torch; from detectron2.layers import DeformConv; \
+  x=torch.randn(1,8,16,16).cuda(); o=torch.zeros(1,18,16,16).cuda(); \
+  DeformConv(8,8,3,padding=1).cuda()(x,o); torch.cuda.synchronize(); print('kernel OK')"
+```
+
+If either fails, the `FORCE_CUDA` / `TORCH_CUDA_ARCH_LIST` pair did not reach that build and it needs
+recompiling — the env is not at fault.
+
+### `senet` — SE-Net (subject embeddings, Stage C) ✓ BUILT 2026-09-14
+Created from `SE-Net/environment.yml` — but **its pip section cannot be installed; see §1.2**, and
+**the env that was actually built, plus the cluster facts behind it, is §1.3**. The table below is
+the *file's* pin list, kept for reference; §1.3's deviation table is what is installed.
 OPEN-2 resolved toward generating our own embeddings on 2026-09-10, so this env **is** needed (F3).
 `deepgaze-pytorch` appears in the table below for fidelity to the file; it is imported nowhere in
 the repository and must not be installed.
@@ -212,9 +342,13 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
 2. **MSDeformAttn** — `cd SE-Net/src/pixel_decoder/ops && sh make.sh`. On a GCC version error:
    `conda install -c conda-forge gxx=9`.
 
-> These two steps are the single biggest install risk in the project. In eval-only mode they are needed
-> **only if we generate our own subject embeddings** (Stage C). If we reuse a released
-> `*_user_embedding.pt`, the `isp` env alone is sufficient. See [Roadmap.md](Roadmap.md) F3.
+> These two steps were **the single biggest install risk in the project, and they are now paid**
+> (2026-09-14, §1.3). Neither is as simple as the two lines above: `nvcc` comes from `module load
+> CUDA/11.6`, both builds need `FORCE_CUDA=1` + `TORCH_CUDA_ARCH_LIST` because the login node has no
+> GPU, and the `gxx=9` remedy turned out to be unnecessary (system gcc 8.5.0 sufficed). **Follow §1.3,
+> not this pair of lines.** In eval-only mode they are needed **only** because OPEN-2 resolved toward
+> generating our own subject embeddings; reusing a released `*_user_embedding.pt` would have needed
+> the `isp` env alone. See [Roadmap.md](Roadmap.md) F3.
 
 ### Command conventions
 - On the cluster: `CUDA_VISIBLE_DEVICES=0 python src/...`, always invoked **from the
@@ -258,6 +392,22 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
 
   *(Retargeted 2026-09-09 from `bash/test_cocofv.sh`; note the `py -m pip` → `python -m pip` fix —
   the `py` launcher is Windows-only and does not exist on the cluster.)*
+- The subject-embedding run (F3 / Stage C), from the repo root on the cluster. **`module load
+  CUDA/11.6` first** — it does not survive a new shell or a fresh allocation, and the script does not
+  yet load it itself:
+  ```
+  salloc --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=04:00:00
+  module load CUDA/11.6
+  bash bash/embed_eve_subjects.sh                 # SEED=0
+  SEED=1 bash bash/embed_eve_subjects.sh
+  ```
+  `SENET_ENV` defaults to the bare name `senet`; if it does not resolve, pass the prefix —
+  `SENET_ENV=/mnt/beegfs/home/leonardo.ulloa/envs/senet`. Same `bash`-never-`source` rule as F1, for
+  the same `-euo pipefail` reason. The run is gated on `check_env.py`'s exit code, and the two
+  outstanding kernel-launch checks in §1.3 should be run once at the top of the first allocation.
+- **Compile on the login node, never under `salloc`.** The cluster has a fair-use policy and holding a
+  GPU to run a compiler violates it in spirit. Both CUDA extensions build GPU-free with
+  `FORCE_CUDA=1` + `TORCH_CUDA_ARCH_LIST` (§1.3) — that is what those flags are for.
 - Its CPU preflight tools, runnable from the repo root on Windows or a login node:
   - `py tools/osie_prep/check_fixations.py --fix PATH --images DIR --fewshot-subject 10 11 12 13 14
     [--split test] [--origin-width 800] [--origin-height 600]`
@@ -890,6 +1040,10 @@ Two more COCO_FV-specific contracts, for the same reason:
 3. **New dataset branch layout.** If we create `ISP/<OurDataset>/GazeformerISP/`, mirror the OSIE tree
    exactly — same filenames, same relative paths — so upstream diffs stay readable.
 4. **Paths.** Never hardcode an absolute path. Cluster paths go in the run script / CLI args, not in `.py`.
+   **And when a cluster path *is* chosen, it must be one the compute nodes can see:**
+   `/mnt/beegfs/home/<user>/` is shared, `/mnt/imagenes/<user>/` is **not**, and `/tmp` is node-local.
+   Envs, source trees, artefacts and any record written for D5 go on beegfs. §1.3 records the day this
+   cost.
 5. **Git hygiene.** `.gitignore` excludes `*.pt`, `*.pth`, `*.h5`, `*.npy`, `*.json` and
    `__pycache__/`, plus `data/`, `work/` and `logs/`. Never commit weights, features, stimulus images,
    or subject-level gaze data — and note that a bridge `--out-dir` contains all three, so it belongs
