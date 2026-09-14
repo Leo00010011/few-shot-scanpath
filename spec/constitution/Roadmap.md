@@ -32,10 +32,26 @@
 > are recorded in **[TechStack.md](TechStack.md) §1.3**. **Read §1.3 before any cluster work** — F4
 > and F5 inherit all of it.
 >
-> F3 is otherwise code complete (2026-09-10, `tools/eve_senet/`, 60/60 tests, OPEN-2 resolved toward
-> generating our own embeddings) and now blocks only on **running it**: the empty
-> `MISSING_KEY_ALLOWLIST` and the GPU-side duration pin. F4 still needs OPEN-6, now at 925 conflicts.
-> F6 remains startable at any time.
+> **F3 CLOSED 2026-09-14 — it ran, and every open item it carried is now an observation.**
+> `(38, 384)` float32 at seeds 0 and 1, `embedding_sha256 = e904a165c985b33f…`, 380 forward passes,
+> **`n_forward == 10` for all 38 subjects** (upstream's `drop_last=True` would have made it 8).
+> `missing_keys` and `unexpected_keys` are both **empty**, so `MISSING_KEY_ALLOWLIST` is correct as
+> **empty** — resolved by observation, never guessed. The duration channel is **pinned dead**: the
+> decile-bin, raw-millisecond and absurd-`1e6` arms produced **byte-identical** tensors
+> (`max_abs_diff = 0.0`). Off-diagonal cosine **0.0623 / 0.7572 / 0.9719** — the encoder does
+> discriminate our participants, but 0.757 is high and F7 must quote it rather than assert
+> separation.
+>
+> **The run turned up five things that were not in the plan, four of which F4 and F5 inherit** — two
+> encoder init pickles that are distributed nowhere and whose upstream existence guards are commented
+> out; a detectron2 0.6 vs checkpoint stage-naming disagreement that, unhandled, leaves the backbone
+> **silently at its initialisation**; `set -u` aborting `conda activate`; and `data/` being
+> git-ignored, so F2's artefacts had to be shipped to the cluster by hand. All five are in the spec's
+> **[notes.md](../2026-09-10-eve-subject-embeddings/notes.md)**; the two structural ones are in
+> [TechStack.md](TechStack.md) §3 items 4-5 and §1.3. **Read them before F4.**
+>
+> F4 still needs OPEN-6, now at 925 conflicts. F5 now blocks on F4 alone. F6 remains startable at any
+> time.
 
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
@@ -53,9 +69,9 @@
 | F0 | Constitution + spec workflow | ✓ DONE (2026-09-07) | — |
 | F1 | Reproduce the **OSIE** eval baseline on the cluster | ✓ **DONE** (2026-09-09) — accepted, gap flagged as **OPEN-7** | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ✓ **DONE** (2026-09-10) — 38 subjects, 1062 scored cells | — |
-| F3 | Subject embeddings for our subjects | ▶ **RUNNABLE** — code complete (2026-09-10), `senet` env built and green (2026-09-14); **not yet run** | — (env cleared; `MISSING_KEY_ALLOWLIST` is resolved *during* the first run) |
+| F3 | Subject embeddings for our subjects | ✓ **DONE** (2026-09-14) — ran at seeds 0 and 1, duration channel pinned, 0 missing / 0 unexpected keys | — |
 | F4 | Feature extraction for our stimuli | ⏸ TODO | **OPEN-6** |
-| F5 | Our-dataset eval branch + run script | ⏸ TODO | F3, F4 |
+| F5 | Our-dataset eval branch + run script | ⏸ TODO | F4 (F3 ✓) |
 | F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — the only unblocked feature; F1 produced its fixture | — |
 | F7 | Results write-up + validity statement | ⏸ TODO | F5, F6 |
 
@@ -364,7 +380,7 @@ from images seen by 4 — routing it to support would put one name in both split
 
 ---
 
-### F3 — Subject embeddings for our subjects ▶ RUNNABLE — code complete 2026-09-10, env green 2026-09-14, not yet run
+### F3 — Subject embeddings for our subjects ✓ DONE (2026-09-14)
 
 Spec: [`spec/2026-09-10-eve-subject-embeddings/`](../2026-09-10-eve-subject-embeddings/)
 (requirements · plan · validation). Implements Stage C; satisfies D4, D5, D7, D8; constrained by D1.
@@ -457,17 +473,74 @@ Built 2026-09-10 (Windows CPU) — `tools/eve_senet/`, `SE-Net/configs/eve_usere
       Still outstanding, and cheap: `check_env.py` green proves every module **imports**, not that a
       CUDA kernel **launches**. Run §1.3's `collect_env | grep -i arch` and its `DeformConv` smoke test
       once at the top of the first F3 allocation, before spending anything.
-- [ ] **Establish the missing-key allowlist.** `MISSING_KEY_ALLOWLIST` ships **empty** on purpose — an
-      allowlist guessed in advance defeats the check it exists for. Run `load_model()` once, read the
-      `missing_keys` it raises with, decide per key whether the checkpoint genuinely omits it, and record
-      the resolved list in the source with a comment naming why. Any `subject_predictor.*` key is
-      **never** allowlistable: it means `num_subjects` disagrees with the checkpoint and `strict=False`
-      has left the head randomly initialised.
-- [ ] Run `bash bash/embed_eve_subjects.sh` at seeds 0 and 1 under `salloc`, then the GPU-side validation
-      — Group 4 (model loading and forward pass), Group 5 (the duration pin), and the Data Validity
-      block. Seed 1 is the artefact F5 needs if OPEN-3's repeat question resolves toward averaging.
-- [ ] Add a `notes.md` to the spec folder if the run surfaces anything structural (the F2 convention, not
-      F1's generated-record one).
+- [x] **Missing-key allowlist established — it stays EMPTY, by observation.** The real run reports
+      `missing_keys = []` **and** `unexpected_keys = []`: nothing needed excusing. In particular no
+      `subject_predictor.*` key is missing, so `Data.num_subjects = 10` agrees with the checkpoint and
+      `strict=False` has not left the subject head randomly initialised (FR6.2). A future non-empty
+      `missing_keys` is a real finding, not a nuisance to allowlist away.
+- [x] **Ran at seeds 0 and 1 on `hpc-gpu3`**, plus `bash/pin_duration_channel.sh`. Artefacts in the
+      git-ignored `data/eve_senet/seed{0,1}/`: the `(38, 384)` float32 tensor, `senet_report.json`,
+      `verify.json`, `check_env.json`, `versions.txt`, `stdout.txt`, and seed 0's `duration_pin.json`.
+      Seed 0 `embedding_sha256 = e904a165c985b33fde68f5de78ef83acf13bbe9494e8d96a1fe3e0edc755166e`;
+      **F5 must assert it** against `senet_report.json` before consuming the tensor (FR8.2).
+- [x] **Group 4 green.** `check_env.py` 11/11 `ok` with `cuda_available: True`; 380 forward passes over
+      38 × 10 support scanpaths; **`n_forward == 10` for every one of the 38 subjects** — the check that
+      catches upstream's `drop_last=True` at `bs = 8` silently discarding 20 % of the support evidence,
+      which would have read `8`.
+- [x] **Group 5 green — the duration channel is PINNED dead, not assumed.** The decile-bin, raw-
+      millisecond and absurd-`1e6` arms produced **byte-identical files** (one sha256 across all three,
+      `torch.equal` true, `max_abs_diff = 0.0`). The absurd arm is what makes it conclusive: no live
+      duration channel can consume `1e6` and return bit-identical output. Recorded in
+      `duration_pin.json` and stamped into `senet_report.json` as `duration_channel_pinned: true`, so
+      the finding survives as an artefact rather than only a green test. FR3's binning is therefore a
+      faithful input contract, not a load-bearing computation.
+- [x] **Data Validity green**, including both falsifiable predictions: **37 of 38** subjects' selections
+      differ across seeds 0 and 1, and subject 34 — pool exactly 10 — draws the same 10 at both. No zero
+      rows, no duplicates, row-norm max/min **1.74**, duration edges exactly
+      `[100, 131, 151, 169, 188, 210, 234, 263, 308, 390, 1144]`, bin occupancy 409-432, and the bridge
+      cross-check 38 / 10 / 742 matches `fixations.json`'s own 742 train records.
+
+      **One stated expectation did not hold, in the harmless direction.** Validation predicted a small
+      non-zero `oob_fixations_dropped` because EVE's `Y` reaches exactly 1080.0; the run reports **0**.
+      The whole train split holds **one** frame-edge fixation and the seed-0 draw does not include it
+      (3 more are in the test split). The prediction was about the dataset; the counter is about 380
+      selected scanpaths. The rescale is fine — and a value in the hundreds would still mean what
+      validation says it means.
+- [x] **`notes.md` written** — [`spec/2026-09-10-eve-subject-embeddings/notes.md`](../2026-09-10-eve-subject-embeddings/notes.md),
+      the F2 convention. It carries the five unplanned findings in full, the validation table, and what
+      F5 and F7 inherit.
+- [x] **Five findings the run produced, four of them inherited by F4/F5** (full text in `notes.md`;
+      the two structural ones in [TechStack.md](TechStack.md) §3 items 4-5):
+      - **Two encoder init pickles are distributed nowhere** — `data/M2F_R50.pkl` and
+        `data/M2F_R50_MSDeformAttnPixelDecoder.pkl` — and `ImageFeatureEncoder` strict-loads both with
+        their `os.path.exists` guards **commented out**, so a missing one is fatal rather than skipped.
+        `tools/eve_senet/make_backbone_init.py` derives them from the released checkpoint (265 + 117
+        tensors), which `load_state_dict(..., strict=False)` then overwrites anyway. **F4 builds the
+        same encoder.**
+      - **detectron2 0.6 names the ResNet stages differently from the checkpoint** (`res*` vs
+        `stages.res*`; identical tensors and shapes). Unhandled, all 260 stage keys land in
+        `unexpected_keys`, `strict=False` swallows them, and the encoder runs on its **initialisation**
+        while producing entirely normal-looking embeddings. `embed.py::align_stage_prefix()` translates
+        names — never values — in whichever direction the installed detectron2 needs, and `load_model()`
+        now **raises** on any surviving unexpected `.backbone.` key rather than trusting the shim.
+      - **`set -euo pipefail` aborts `conda activate`** in this env (`libblas_mkl_activate.sh` reads
+        `MKL_INTERFACE_LAYER` before assigning it). Both F3 scripts lift `set +u` across activation.
+        **F4 and F5 hit this the moment they activate `senet`** (TechStack §1.3).
+      - **`data/` is git-ignored, so F2's artefacts were not on the cluster** — `fixations.json`,
+        `subject_id_map.json`, `bridge_report.json`, `gt_heatmaps.h5` and 877 stimuli (~310 MB) had to
+        be shipped by hand. `data/osie_embeddings.npy` did not: it is byte-identical to the tracked
+        `ISP/OSIE/GazeformerISP/src/data/embeddings.npy`.
+- [x] 91/91 pytest tests pass on Windows CPU (60 before the run, +10 duration pin, +12 backbone init,
+      +9 stage-prefix); no tracked file under `SE-Net/` or `ISP/` modified (D1, convention 2).
+
+**For F7, from this run:** off-diagonal cosine **min 0.0623 / mean 0.7572 / max 0.9719** (seed 1:
+0.1735 / 0.7628 / 0.9679). The encoder does discriminate our participants, but 0.757 is high enough
+that the honest claim is "distinguishable", not "well separated" — and the 0.972 pair is worth
+naming. `len1_scanpaths = 2`. The SE-Net input squash is 512×**320** (0.2667 / 0.2963), a *second*
+and different distortion from F5's 512×384 metric screen (OPEN-4); both must be stated. And the
+encoder's weights reached the model through a name translation with its init pickles derived from the
+checkpoint — neither changes a value, and `unexpected_keys = []` is the evidence, but both are
+deviations from the authors' own load path.
 
 ---
 
@@ -772,6 +845,7 @@ reproduction ran ~1 % low to begin with.
 | ~~Detectron2~~ | source install, v0.6 — **obtained 2026-09-14**, non-editable from shared storage (TechStack §1.3) | ~~F3~~ ✓ |
 | ~~MSDeformAttn~~ | `SE-Net/src/pixel_decoder/ops/make.sh` — **built 2026-09-14** with `FORCE_CUDA=1` (TechStack §1.3) | ~~F3~~ ✓ |
 | CUDA toolkit for compiling | `module load CUDA/11.6` — **not** 12.4, and absent from `PATH` by default | F3 ✓, any future extension build |
+| SE-Net encoder init pickles — `data/M2F_R50.pkl`, `data/M2F_R50_MSDeformAttnPixelDecoder.pkl` | **distributed nowhere** — not in the repo, the checkpoint bundle, or the READMEs' Drive folders. **Derived from the released checkpoint** by `tools/eve_senet/make_backbone_init.py` (2026-09-14); `ImageFeatureEncoder` strict-loads both with their `os.path.exists` guards commented out, so a missing one is fatal (TechStack §3 item 4) | F3 ✓, F4 (same encoder) |
 | ~~`stsb-roberta-base-v2`~~ | ~~sentence-transformers hub~~ — **not needed**: every branch ships `embeddings.npy`, `text_data()` is never called, and `bash/test_osie.sh` stubs the import (TechStack §1.1) | ~~F1~~, F4 only if regenerating |
 | Mask R-CNN R50-FPN COCO weights | torchvision download — **obtained 2026-09-09** (Stage B ran) | ~~F1~~ ✓, F4 |
 | `evedataset` wheel + `bundle.h5` | `eve_shared/EveDataset/` (installed, git-ignored) | F2 |

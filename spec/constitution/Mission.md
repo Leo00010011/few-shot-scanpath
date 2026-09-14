@@ -137,9 +137,13 @@ OPEN-2 settled it on 2026-09-10: we generate our own embeddings** rather than lo
 address 38 participants, and borrowing it would sever P2's claim that prediction *i* is meaningful
 *because* it is personalised to subject *i*. `tools/eve_senet/` (F3) drives the released SE-Net
 checkpoint over each participant's own 10-shot support set and writes a `(38, 384)` tensor in dense-id
-order. **The `senet` environment this needs — Detectron2 + MSDeformAttn, the install the project
-called its biggest risk — was built and verified green on 2026-09-14**
-([TechStack.md](TechStack.md) §1.3), so Stage C is now a matter of running it, not of paying for it. **The checkpoint is still OSIE-trained**: what transfers is the encoder, not the subjects, and
+order. **Stage C has run (2026-09-14)**, at seeds 0 and 1, on the `senet` env whose Detectron2 +
+MSDeformAttn install the project called its biggest risk ([TechStack.md](TechStack.md) §1.3):
+`data/eve_senet/seed0/eve_fewshot_user_embedding_10_seed0.pt`, sha256 `e904a165c985b33f…`, zero
+missing and zero unexpected state-dict keys, and the duration channel pinned dead by three
+bitwise-identical arms. Getting there needed two encoder init pickles that are distributed nowhere
+and a name translation between the checkpoint and detectron2 0.6 — neither changes a weight, both are
+recorded, and **F4 inherits both** (Roadmap F3, and the spec's `notes.md`). **The checkpoint is still OSIE-trained**: what transfers is the encoder, not the subjects, and
 F7 must say so — that is what remains of the open scientific question recorded in
 [Roadmap.md](Roadmap.md).
 

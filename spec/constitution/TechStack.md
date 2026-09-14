@@ -921,6 +921,35 @@ upstream (working convention 2 — additive over invasive; `SE-Net/` is untouche
    check** (`--duration-arm raw` and `--duration-arm absurd` are the control arms, compared by
    `tools/eve_senet/pin_durations.py`) rather than assuming it. If that check ever fails,
    the channel has come alive and every embedding produced under the assumption is invalid.
+4. **`ImageFeatureEncoder.__init__` loads two init pickles that ship with nothing, and both loads are
+   unguarded.** ◀ found on F3's first real run, 2026-09-14. It reads `data/resnet50.yaml`'s
+   `MODEL.WEIGHTS` (`data/M2F_R50.pkl`, the ResNet) and the same path with
+   `_MSDeformAttnPixelDecoder` appended (the deformable pixel decoder), and **strict**-loads each.
+   The authors' own `if os.path.exists(...)` guards are **commented out** on both, so a missing file
+   is a bare `FileNotFoundError` several frames inside SE-Net, not a skip. Neither file is in this
+   repository, in the checkpoint bundle, or in the READMEs' Drive folders.
+
+   They are *initialisation* only — `load_model()`'s `load_state_dict(ckp["model"], strict=False)`
+   overwrites every one of their tensors immediately afterwards, and the released checkpoint carries
+   **all** of them (265 under `encoder.backbone.*`, 117 under `encoder.pixel_decoder.*`). So
+   `tools/eve_senet/make_backbone_init.py` lifts both subtrees out of that checkpoint rather than
+   downloading third-party pickles whose provenance cannot be checked against it. The two strict
+   loads are then themselves the completeness check. **F4 builds the same encoder and inherits this.**
+5. **The released checkpoint's backbone names disagree with detectron2 0.6's.** ◀ same run. The
+   checkpoint stores `encoder.backbone.stages.res{2..5}.*`; `build_resnet_backbone` in **0.6**
+   registers the stages directly and wants bare `res{2..5}.*`. Same 265 tensors, identical shapes,
+   **zero** structural difference — only the name. `models.py`'s own rename loop
+   (`"stages." + k` for leading-`res` keys) is written for the authors' detectron2 and cannot produce
+   0.6's names from any input, so under 0.6 the encoder simply cannot be constructed as shipped.
+
+   `tools/eve_senet/embed.py::align_stage_prefix()` translates the names — never the values — in
+   whichever direction the *installed* detectron2 needs, so it is a **no-op** under the authors'
+   version. It is applied twice: through a wrapper on `src.models.build_backbone` for the strict init
+   load, and to the checkpoint before `load_state_dict`. **The second is the one that matters.**
+   Without it all 260 stage keys land in `unexpected_keys`, `strict=False` swallows them, and the
+   encoder runs on its initialisation while producing embeddings that look entirely normal — which
+   is why `load_model()` now raises on any remaining unexpected `.backbone.` key rather than
+   trusting the shim. Nothing under `SE-Net/` is edited (convention 2).
 
 ---
 
