@@ -82,3 +82,24 @@ def bin_occupancy(records_binned):
         for b in r["T"]:
             counts[int(b)] += 1
     return counts
+
+
+ABSURD_DURATION = 1e6
+
+
+def absurd_scanpath_durations(records, value=ABSURD_DURATION):
+    """Copy each record with every ``T`` replaced by ``value`` (validation Group 5).
+
+    The second control arm of the duration-deadness pin. ``--raw-durations`` feeds a
+    *plausible* alternative encoding (milliseconds instead of decile indices), which a
+    tolerance-based comparison could pass even with a small live contribution; this
+    arm feeds a value no real fixation can take, so a live duration channel cannot
+    produce a bitwise-identical tensor. Never in place, for the same reason
+    :func:`bin_scanpath_durations` is not.
+    """
+    out = []
+    for r in records:
+        c = dict(r)
+        c["T"] = [float(value) for _ in r["T"]]
+        out.append(c)
+    return out

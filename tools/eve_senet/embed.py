@@ -44,15 +44,18 @@ try:
     from . import EveSenetError
     from .check_env import write_versions
     from .dataset import EveSupportDataset, build_fix_labels, rescale_ratios
-    from .durations import bin_occupancy, bin_scanpath_durations, decile_bins
+    from .durations import (absurd_scanpath_durations, bin_occupancy,
+                            bin_scanpath_durations, decile_bins)
 except ImportError:  # executed as a script, not as a package member
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from eve_senet import EveSenetError
     from eve_senet.check_env import write_versions
     from eve_senet.dataset import EveSupportDataset, build_fix_labels, rescale_ratios
-    from eve_senet.durations import bin_occupancy, bin_scanpath_durations, decile_bins
+    from eve_senet.durations import (absurd_scanpath_durations, bin_occupancy,
+                                     bin_scanpath_durations, decile_bins)
 
 EMBEDDING_DIM = 384          # == ISP's args.subject_feature_dim (FR7.3)
+DURATION_ARMS = ("bins", "raw", "absurd")   # validation Group 5; "bins" is the real one
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
@@ -263,7 +266,7 @@ def embed_subject(model, records, pa, device, transform, data_root, batch_size=8
 
 def build_embeddings(fixations_path, subject_map_path, report_path, image_dir,
                      checkpoint, config, out_dir, num_fewshot=10, seed=0,
-                     device="cuda", data_root=None, use_raw_durations=False,
+                     device="cuda", data_root=None, duration_arm="bins",
                      allow_missing=()):
     """The whole of Stage C. Returns ``((N, 384) tensor, senet_report dict)``."""
     set_seeds(seed)
@@ -310,10 +313,17 @@ def build_embeddings(fixations_path, subject_map_path, report_path, image_dir,
                 bridge["min_support_per_subject"], num_fewshot))
 
     edges, bin_of = decile_bins([t for r in train for t in r["T"]])  # FR3.2
-    if use_raw_durations:
-        # Validation Group 5's control arm only. The tensor must come back bitwise
-        # identical, pinning the dead duration channel (FR3.4).
+    if duration_arm not in DURATION_ARMS:
+        raise EveSenetError(
+            "build_embeddings: duration_arm={!r}, expected one of {} "
+            "(validation Group 5)".format(duration_arm, DURATION_ARMS))
+    if duration_arm == "raw":
+        # Group 5's first control arm: raw milliseconds instead of decile indices.
         prepared = [dict(r) for r in train]
+    elif duration_arm == "absurd":
+        # Group 5's second control arm: a value no real fixation can take, so a
+        # small live contribution cannot hide inside a tolerance.
+        prepared = absurd_scanpath_durations(train)
     else:
         prepared = bin_scanpath_durations(train, bin_of)
     by_key = {(r["name"], r["subject"]): r for r in prepared}
@@ -378,7 +388,8 @@ def build_embeddings(fixations_path, subject_map_path, report_path, image_dir,
                 zero_rows, [subject_map["to_eve"][str(i)] for i in zero_rows]))
 
     os.makedirs(out_dir, exist_ok=True)
-    emb_name = "eve_fewshot_user_embedding_{}_seed{}.pt".format(num_fewshot, seed)
+    emb_name = "eve_fewshot_user_embedding_{}_seed{}{}.pt".format(
+        num_fewshot, seed, "" if duration_arm == "bins" else "_" + duration_arm)
     emb_path = os.path.join(out_dir, emb_name)
     torch.save(emb, emb_path)
 
@@ -388,7 +399,7 @@ def build_embeddings(fixations_path, subject_map_path, report_path, image_dir,
             "report": report_path, "image_dir": image_dir, "checkpoint": checkpoint,
             "config": config, "out_dir": out_dir, "num_fewshot": num_fewshot,
             "seed": seed, "device": str(device),
-            "use_raw_durations": bool(use_raw_durations),
+            "duration_arm": duration_arm,
         },
         "embedding_file": emb_name,
         "num_subjects": n_subjects,
@@ -454,9 +465,13 @@ def main(argv=None):
     p.add_argument("--allow-cpu", dest="allow_cpu", action="store_true",
                    help="permit --device cpu; without it a silently CPU-bound run "
                         "cannot be mistaken for a normal one")
-    p.add_argument("--raw-durations", dest="raw_durations", action="store_true",
-                   help="validation Group 5's control arm: feed raw ms instead of "
-                        "decile bins. The tensor must come back bitwise identical")
+    p.add_argument("--duration-arm", dest="duration_arm", default="bins",
+                   choices=list(DURATION_ARMS),
+                   help="validation Group 5. 'bins' is the real run; 'raw' feeds "
+                        "milliseconds and 'absurd' feeds 1e6 -- both tensors must "
+                        "come back BITWISE identical to 'bins', which is what pins "
+                        "the dead duration channel (FR3.4). Compare the arms with "
+                        "tools/eve_senet/pin_durations.py")
     p.add_argument("--allow-missing-key", dest="allow_missing", action="append",
                    default=[], help="state-dict key prefix the checkpoint may omit; "
                                     "record resolved entries in MISSING_KEY_ALLOWLIST")
@@ -470,7 +485,7 @@ def main(argv=None):
             args.fixations, args.subject_map, args.report, args.image_dir,
             args.checkpoint, args.config, args.out_dir,
             num_fewshot=args.num_fewshot, seed=args.seed, device=args.device,
-            data_root=args.data_root, use_raw_durations=args.raw_durations,
+            data_root=args.data_root, duration_arm=args.duration_arm,
             allow_missing=tuple(args.allow_missing))
     except EveSenetError as exc:
         sys.stderr.write("FATAL F3 failure: {}\n".format(exc))

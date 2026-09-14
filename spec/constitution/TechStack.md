@@ -463,10 +463,18 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
     code with `embed.py`'s own assertions on purpose: a checker built from the writer's helpers can
     only confirm the writer was self-consistent.
 - `py tools/eve_senet/embed.py --checkpoint PATH [--fixations ...] [--num-fewshot 10] [--seed 0]
-  [--device cuda] [--raw-durations] [--allow-missing-key PREFIX]`, if invoked directly. `--device cpu`
-  is **refused** unless `--allow-cpu` is also passed, so a silently CPU-bound run cannot be mistaken
-  for a normal one. `--raw-durations` is validation Group 5's control arm and nothing else.
-- Its tests: `py -m pytest tests/eve_senet -q` (60 tests). The `bridge`-marked ones read the real
+  [--device cuda] [--duration-arm bins|raw|absurd] [--allow-missing-key PREFIX]`, if invoked
+  directly. `--device cpu` is **refused** unless `--allow-cpu` is also passed, so a silently
+  CPU-bound run cannot be mistaken for a normal one. `--duration-arm` is validation Group 5's and
+  nothing else: `bins` is every real run, `raw` feeds milliseconds, `absurd` feeds `1e6`, and the
+  two control arms write `..._raw.pt` / `..._absurd.pt` so they cannot overwrite the real tensor.
+  - `py tools/eve_senet/pin_durations.py --reference PATH --arm raw=PATH --arm absurd=PATH
+    [--senet-report PATH]` — CPU-only. `torch.equal` across the arms, **not** `allclose`: a
+    tolerance would let a small live contribution through, which is the one thing the pin exists to
+    catch. Writes `duration_pin.json` — **also when the pin fails**, since that is the more
+    important artefact — and stamps `duration_channel_pinned` into that seed's `senet_report.json`.
+    `bash/pin_duration_channel.sh` drives all three arms at one seed.
+- Its tests: `py -m pytest tests/eve_senet -q` (70 tests). The `bridge`-marked ones read the real
   `data/eve_bridge/` artefacts and **skip** when absent — that directory is git-ignored, so a fresh
   checkout has none.
 
@@ -895,7 +903,8 @@ upstream (working convention 2 — additive over invasive; `SE-Net/` is untouche
    reads it in between, so the duration never reaches the network. F3 still feeds EVE's own **decile
    bins** — the input contract the released checkpoint was trained under (§3.7), one numpy call, and
    correct if a future variant consumes the channel — and **pins the deadness with a bitwise-identity
-   check** (`--raw-durations` is the control arm) rather than assuming it. If that check ever fails,
+   check** (`--duration-arm raw` and `--duration-arm absurd` are the control arms, compared by
+   `tools/eve_senet/pin_durations.py`) rather than assuming it. If that check ever fails,
    the channel has come alive and every embedding produced under the assumption is invalid.
 
 ---

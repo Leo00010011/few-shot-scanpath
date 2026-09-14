@@ -98,19 +98,28 @@ cluster against the real bridge artefacts.
 
 ### Group 5 — The duration-deadness pin (GPU, `senet` env) ◀ the finding that must not rot
 
-- [ ] Running `build_embeddings` twice at the same seed — once with FR3 decile bins, once with raw
-      milliseconds substituted — produces tensors that are **bitwise identical**
+> Driven by `bash/pin_duration_channel.sh` (three arms at one seed) and
+> `tools/eve_senet/pin_durations.py` (the comparison). Run it after
+> `bash/embed_eve_subjects.sh` has produced that seed's reference tensor. The comparison logic
+> itself is unit-tested on CPU in `tests/eve_senet/test_pin_durations.py` — including the failing
+> direction, because a pin that cannot fail proves nothing.
+
+- [ ] Running `build_embeddings` twice at the same seed — once with FR3 decile bins
+      (`--duration-arm bins`), once with raw milliseconds substituted (`--duration-arm raw`) —
+      produces tensors that are **bitwise identical**
       (`torch.equal(a, b) is True`, not `allclose`). This pins the observation that
       `SE-Net/src/models.py` L677–678 adds `duration_encoding` into `ventral_pos` and then calls
       `ventral_pos.fill_(0)`, so the duration never reaches the network (FR3.4).
-- [ ] The same comparison with an **absurd** duration (all fixations set to `1e6`) is also bitwise
-      identical. A tolerance-based check could hide a small live contribution; an absurd input cannot.
+- [ ] The same comparison with an **absurd** duration (`--duration-arm absurd`, all fixations set to
+      `1e6`) is also bitwise identical. A tolerance-based check could hide a small live contribution; an absurd input cannot.
 - [ ] **On failure, this is not a test bug.** It means the duration channel is live in this
       env/checkpoint combination, in which case: every embedding generated under the assumption is
       invalid, FR3's binning becomes load-bearing rather than merely faithful, and the result must be
       escalated to a roadmap note before F5 consumes anything.
 - [ ] `senet_report.json` records `duration_channel_pinned: true` with the tensor hashes of both runs,
-      so the check is an artefact and not only a green test.
+      so the check is an artefact and not only a green test. `pin_durations.py --senet-report` writes
+      it, and `duration_pin.json` carries the same result alongside the reference tensor — written on
+      failure too.
 
 ### Group 6 — Frozen-tree and convention compliance (CPU)
 
