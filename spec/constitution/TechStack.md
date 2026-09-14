@@ -220,6 +220,21 @@ unusable pip section — precisely the combination that produces a confusing fai
 3. **There is no `nvcc` on the compute nodes, and none on `PATH` by default anywhere.** CUDA comes
    from the module system: `module avail` offers **`CUDA/11.6`** and `CUDA/12.4`.
 
+#### A fourth, found on F3's first run attempt (2026-09-14): `set -u` vs `conda activate`
+
+The `senet` env ships `etc/conda/activate.d/libblas_mkl_activate.sh`, which **reads**
+`MKL_INTERFACE_LAYER` before assigning it. Under `set -euo pipefail` — which every run script in
+`bash/` uses — `conda activate` therefore aborts the entire script with
+`MKL_INTERFACE_LAYER: variable sin asignar` **before a single line of our code runs**, and the
+failure looks like a broken env rather than a shell-option collision. It is neither: the env is fine.
+
+`bash/embed_eve_subjects.sh` and `bash/pin_duration_channel.sh` now lift `set +u` across the
+activation and restore `set -u` immediately after; `-e` and `-o pipefail` stay on throughout, so a
+genuine activation failure still stops the run. The one-shot workaround, if you hit this on an
+unpatched script, is `export MKL_INTERFACE_LAYER=${MKL_INTERFACE_LAYER:-}` before invoking it.
+`bash/test_osie.sh` has the same construct but the `scanpath` env carries no such hook, which is why
+F1 never saw it — **F4 and F5 will see it the moment they activate `senet`.**
+
 #### Use `CUDA/11.6`, never `CUDA/12.4`
 
 Torch's `cpp_extension` **raises** on a CUDA *major*-version mismatch and only *warns* on a minor one.

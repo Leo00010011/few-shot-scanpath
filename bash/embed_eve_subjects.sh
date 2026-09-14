@@ -44,9 +44,17 @@ echo "env=$SENET_ENV seed=$SEED num_fewshot=$NUM_FEWSHOT device=$DEVICE"
 echo "bridge=$BRIDGE_DIR out=$SEED_DIR"
 echo "node=${SLURM_NODELIST:-$(hostname)}"
 
+# `set -u` must be lifted across activation: this env's
+# etc/conda/activate.d/libblas_mkl_activate.sh reads MKL_INTERFACE_LAYER before
+# assigning it, so with nounset on, conda activate aborts the whole script with
+# "MKL_INTERFACE_LAYER: unbound variable" and no F3 code ever runs. It is a hook in
+# the env, not a defect in ours -- and -e/-o pipefail stay on throughout, so a genuine
+# activation failure still stops the run.
 # shellcheck disable=SC1091
+set +u
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$SENET_ENV"
+set -u
 
 mkdir -p "$SEED_DIR" logs
 
