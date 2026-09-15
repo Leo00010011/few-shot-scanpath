@@ -37,6 +37,57 @@ Four things the run itself established:
 
 ---
 
+## 0b. Validation against the real cache — 2026-09-15, **16 ok, 0 substantive failures**
+
+`validate_features.py` on the cluster, `SPLIT=test`:
+
+| check | result |
+|---|---|
+| coverage | **1062** tensors, exactly `bridge_report.json`'s `num_trials_test` |
+| file sizes | min 6,293,103 B — above the 6,291,456 B floor, no truncation |
+| tensor health | std 0.3009–0.4472, all finite, **`min == 0.0`** on all 30 sampled (post-ReLU) |
+| sparsity | min 0.726 **median 0.827** max 0.871 |
+| **per-trial keying** | within-name **0.6063 / 0.7749 / 0.9603**, cross-name median **0.4504**, **none identical** |
+| `feature_sha256` | **all 1062** match `feature_report.json` (FR8.2 — F5's handshake) |
+| phantom keys | 1062 stems == 1062 trials, both directions |
+| exp_key round-trip | all 1062, through the store's **reverse** index |
+| dense ids | exactly `0..37` |
+| F2 artefacts | `fixations.json` unchanged since F2, and F4 used it |
+| `embeddings.npy` | byte-identical to the OSIE source, sha `a94bcf6534a2430e…` |
+
+**The measured numbers land where the pre-run CPU sample predicted**, which is the
+useful part: sparsity 0.726–0.871 against a pre-run 0.752–0.858 (both above
+validation's stated 0.3–0.8 band, both far below its 0.95 investigate threshold), and
+within-name cosine median 0.775 against a pre-run 0.721. The extremes still overlap —
+cross-name max **0.6597** exceeds within-name min **0.6063** — exactly as §2 found,
+which is why the assertion is on medians.
+
+**§2's correction is now confirmed on real data, not a CPU sample.** 1 of the 10
+sampled pairs sits below validation's predicted 0.7 floor. Had the check been written
+as specified it would have failed a perfectly sound cache.
+
+## 0c. Two defects the validation run exposed — in the checker, not the data
+
+1. **`evedataset` missing was reported as FAIL, not skip.** The script was invoked
+   from the **`senet`** env, where `evedataset` is not installed (it lives in
+   `scanpath`, which is what Stage B ran in). Two sound checks read `FAIL` and the run
+   summarised as broken when the cache was perfect. A check that **cannot run** is not
+   a check that **failed** — the same distinction the script already made for a
+   missing `--bundle-dir`, not carried through to a missing import. Both bundle checks
+   now route through `_require_evedataset()`, which raises `_Skip` with a message
+   naming the env that has it. A test blocks the import and asserts both skip.
+2. **`f3_embedding_untouched` skipped on a wrong key name.** The validator looked for
+   `embedding_path`; F3's report writes **`embedding_file`**. The handshake with F3
+   silently did not happen. Now it reads the right key, falls back to the lone
+   non-control `.pt` beside the report if the key is ever renamed, and a test asserts
+   a *changed* tensor **FAILs** rather than skipping — a silent skip on the F5
+   handshake is the failure mode worth guarding.
+
+Both were found only because the run was done in the "wrong" env, which is an argument
+for running validators in more than one environment rather than fewer.
+
+---
+
 ## 1. Status: extraction done for the scored split; the checks are scripted
 
 Everything in the plan's Implementation Order is built, tested and **run** for
@@ -53,9 +104,9 @@ the Windows dev machine:
 | 6 | **bundle integration, on the real bundle** | 10/10 |
 | 7 (static) | run-script invariants that are greppable | 12/12, 1 skipped |
 | — | upstream untouched, keying greps | 4/4 |
-| — | the post-run validator, incl. 8 deliberate corruptions | 10/10 |
+| — | the post-run validator, incl. 8 deliberate corruptions | 14/14 |
 
-**89 passed, 1 skipped** (`bash -n`, see §5). Run them with:
+**93 passed, 1 skipped** (`bash -n`, see §5). Run them with:
 
 ```
 py -m pytest tests/eve_prep -q --bundle-dir <path to EveDataset/bundle>
@@ -272,21 +323,25 @@ a failed allocation to discover.
 
 ## 8. Still to do
 
-1. **Run the post-run validator on the cluster** — CPU-only, login node, no GPU:
+**F4 is done for the scored split.** What is left is optional or deliberately
+unexercised, and none of it blocks F5.
+
+1. **Re-run the validator from the `scanpath` env, inside an allocation**, to turn the
+   two bundle spot-checks from skip into ok:
    ```
-   python tools/eve_prep/validate_features.py        --features data/eve_features --bridge-dir data/eve_bridge        --senet-report data/eve_senet/seed0/senet_report.json
+   conda activate scanpath
+   python tools/eve_prep/validate_features.py        --features data/eve_features --bridge-dir data/eve_bridge        --senet-report data/eve_senet/seed0/senet_report.json        --bundle-dir $LOCAL_SCRATCH/data/bundle
    ```
-   It writes `data/eve_features/validation_report.json` and exits non-zero on any
-   failure. Add `--bundle-dir` only while a staged bundle still exists (inside the
-   allocation, `$LOCAL_SCRATCH/data/bundle`), otherwise its two bundle-dependent
-   checks skip — and a skip is reported as a skip, never as a pass.
-2. **Transcribe its numbers here** — the realised sparsity band and the within-/
-   cross-name cosine medians from the *real* tensors, to sit beside the pre-run CPU
-   estimates in §2 and §3. Then flip F4 to ✓ DONE.
-3. **Optional: `SPLIT=train`.** Only if F5 ever needs support-split features;
+   Both were verified on the **dev machine** against the same bundle instead —
+   `tests/eve_prep/test_bundle_integration.py` covers subject identity end to end on
+   sampled trials, and §3 records the fixations-on-the-photo spot-check (5/5, 7/7,
+   7/7). So the property is evidenced; it is the *cluster-side* confirmation that is
+   outstanding. Same for `f3_embedding_untouched`, which needs
+   `data/eve_senet/seed0/` present.
+2. **Optional: `SPLIT=train`.** Only if F5 ever needs support-split features;
    `test.py` builds no train-split loader. The extractor is resumable, so it would
    fill the 742 gaps and leave the 1062 alone.
-4. **Not exercised, and honestly so:** validation Group 7's four deliberate failure
+3. **Not exercised, and honestly so:** validation Group 7's four deliberate failure
    runs (missing `bundle.h5`, missing `stimuli/`, missing `gt_heatmaps.h5`,
    insufficient space) and the `FORCE_FEATURES=1` determinism check. The clean run
    exercised the happy path only.

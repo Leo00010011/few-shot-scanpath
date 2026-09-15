@@ -232,3 +232,87 @@ def test_main_writes_a_report_and_returns_exit_codes(cache, capsys):
     os.remove(os.path.join(cache["feat_dir"], cache["keys"][0] + ".pth"))
     assert main(argv) == 1
     capsys.readouterr()
+
+
+def test_uninstalled_evedataset_skips_rather_than_fails(cache, monkeypatch, tmp_path):
+    """A check that CANNOT RUN is not a check that failed.
+
+    Observed for real on F4's first validation run: invoked from the `senet` env,
+    where evedataset is not installed, two sound checks reported FAIL and the run
+    read as broken when the cache was perfect.
+    """
+    import builtins
+
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name == "evedataset" or name.startswith("evedataset."):
+            raise ImportError("No module named 'evedataset'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+
+    staged = tmp_path / "bundle"
+    staged.mkdir()
+    summary, ok = validate(cache["features"], cache["bridge_dir"],
+                           bundle_dir=str(staged), verify_sha=False)
+    assert ok, [r for r in summary["checks"] if r["status"] == "FAIL"]
+    for name in ("fixations_land_on_the_stimulus", "subject_identity_survives"):
+        assert _status(summary, name) == "skip"
+        detail = next(r["detail"] for r in summary["checks"] if r["check"] == name)
+        assert "scanpath" in detail, "the skip must name the env that has it"
+
+
+def test_absent_bundle_dir_skips(cache):
+    summary, ok = validate(cache["features"], cache["bridge_dir"],
+                           bundle_dir="/nonexistent/bundle", verify_sha=False)
+    assert ok
+    assert _status(summary, "subject_identity_survives") == "skip"
+
+
+def test_f3_embedding_is_found_by_embedding_file(cache, tmp_path):
+    """The report names the tensor in `embedding_file` -- not `embedding_path`."""
+    import hashlib
+
+    seed_dir = tmp_path / "eve_senet" / "seed0"
+    seed_dir.mkdir(parents=True)
+    emb = seed_dir / "eve_fewshot_user_embedding_10_seed0.pt"
+    torch.save(torch.ones((38, 384), dtype=torch.float32), str(emb))
+    with open(emb, "rb") as fh:
+        sha = hashlib.sha256(fh.read()).hexdigest()
+    report = seed_dir / "senet_report.json"
+    with open(report, "w") as fh:
+        json.dump({"embedding_file": emb.name, "embedding_sha256": sha}, fh)
+
+    summary, ok = validate(cache["features"], cache["bridge_dir"],
+                           senet_report=str(report), verify_sha=False)
+    assert _status(summary, "f3_embedding_untouched") == "ok"
+
+    # A changed tensor must FAIL, not skip -- this is F5's handshake with F3.
+    torch.save(torch.zeros((38, 384), dtype=torch.float32), str(emb))
+    summary2, ok2 = validate(cache["features"], cache["bridge_dir"],
+                             senet_report=str(report), verify_sha=False)
+    assert _status(summary2, "f3_embedding_untouched") == "FAIL"
+    assert not ok2
+
+
+def test_f3_embedding_found_by_glob_when_key_is_missing(cache, tmp_path):
+    """A renamed key must not silently skip the handshake."""
+    import hashlib
+
+    seed_dir = tmp_path / "eve_senet" / "seed1"
+    seed_dir.mkdir(parents=True)
+    emb = seed_dir / "eve_fewshot_user_embedding_10_seed1.pt"
+    torch.save(torch.ones((38, 384), dtype=torch.float32), str(emb))
+    # Control arms must not confuse the fallback.
+    torch.save(torch.ones(2), str(seed_dir / "eve_x_raw.pt"))
+    torch.save(torch.ones(2), str(seed_dir / "eve_x_absurd.pt"))
+    with open(emb, "rb") as fh:
+        sha = hashlib.sha256(fh.read()).hexdigest()
+    report = seed_dir / "senet_report.json"
+    with open(report, "w") as fh:
+        json.dump({"embedding_sha256": sha}, fh)      # no embedding_file key
+
+    summary, _ = validate(cache["features"], cache["bridge_dir"],
+                          senet_report=str(report), verify_sha=False)
+    assert _status(summary, "f3_embedding_untouched") == "ok"

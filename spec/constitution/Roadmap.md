@@ -50,13 +50,22 @@
 > **[notes.md](../2026-09-10-eve-subject-embeddings/notes.md)**; the two structural ones are in
 > [TechStack.md](TechStack.md) §3 items 4-5 and §1.3. **Read them before F4.**
 >
-> **F4 CODE COMPLETE 2026-09-14 — OPEN-6 resolved, and the last open decision with it.**
+> **F4 CLOSED 2026-09-15 — ran clean, validated, and OPEN-6 resolved with it.**
+> **1062 feature tensors for the scored split, 0 skipped, every D7 counter `0`**, and
+> `validate_features.py` green on 16 checks against the real cache — coverage exact, all 1062
+> `feature_sha256` matching, no phantom keys, dense ids `0..37`, `fixations.json` unchanged since
+> F2. **Per-trial keying is confirmed on real tensors**: within-name cosine 0.6063 / **0.7749** /
+> 0.9603 against a cross-stimulus median of **0.4504**, none bit-identical. That is OPEN-6 resolved
+> in fact rather than only by design, and it is the number F7 quotes about the display-scale
+> augmentation. **F5 is unblocked.**
+>
+> **F4 as originally written (2026-09-14):**
 > `tools/eve_prep/` keys features by **`exp_key`**, one tensor per `(stimulus, participant)` trial,
-> so the 925 conflicts have nothing left to contend over. **78/78 tests pass on Windows CPU**,
+> so the 925 conflicts have nothing left to contend over. **93/93 tests pass on Windows CPU**,
 > including the load-bearing **FR4.4 bit-identity** with upstream `image_data()` (`torch.equal`, not
 > `allclose`) and the **D4 cross-check agreeing on all 1804 trials** against an independent
 > `samples_df` derivation. The dev machine's own copy of the bundle meant Group 6 needed no cluster.
-> **78/78** after the run script was corrected against `EyeNet-Pipeline/whole_train.sh` — see
+> The run script was corrected against `EyeNet-Pipeline/whole_train.sh` — see
 > [TechStack.md](TechStack.md) §1.3's cluster facts 4–6, which **F5 inherits**.
 >
 > Two things F5 and F7 inherit. **F4 shares nothing with F3** — no detectron2, no MSDeformAttn, no
@@ -66,9 +75,7 @@
 > a cross-stimulus median of 0.382) — the quantitative statement OPEN-6 always lacked, and *not* the
 > flat `≥ 0.7` floor validation predicted.
 >
-> **What remains is the run**: ~11.3 GB for both splits (6.7 GB for `test` alone, which is all F5
-> needs), under `salloc`, with `bundle.h5` + `bundle/stimuli/` shipped by hand because `data/` is
-> git-ignored. F5 blocks on that run, not on F4's code. F6 remains startable at any time.
+> F6 remains startable at any time.
 
 > **Reverted 2026-09-09.** F1 was briefly re-pointed at COCO-FreeView (commit `ce6b5dd`). That is undone:
 > the COCO-FreeView *test* split is a held-out challenge benchmark with no public labels, so the run is
@@ -87,8 +94,8 @@
 | F1 | Reproduce the **OSIE** eval baseline on the cluster | ✓ **DONE** (2026-09-09) — accepted, gap flagged as **OPEN-7** | — |
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ✓ **DONE** (2026-09-10) — 38 subjects, 1062 scored cells | — |
 | F3 | Subject embeddings for our subjects | ✓ **DONE** (2026-09-14) — ran at seeds 0 and 1, duration channel pinned, 0 missing / 0 unexpected keys | — |
-| F4 | Per-trial image features for our stimuli | ◐ **CODE COMPLETE** (2026-09-14) — 78/78 tests, **OPEN-6 resolved**; the extraction run is outstanding | — |
-| F5 | Our-dataset eval branch + run script | ⏸ TODO | F4's **run** (code ✓, F3 ✓) |
+| F4 | Per-trial image features for our stimuli | ✓ **DONE** (2026-09-15) — 1062 tensors extracted and validated, **OPEN-6 resolved** | — |
+| F5 | Our-dataset eval branch + run script | ▶ **NEXT** — unblocked | — |
 | F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — the only unblocked feature; F1 produced its fixture | — |
 | F7 | Results write-up + validity statement | ⏸ TODO | F5, F6 |
 
@@ -113,11 +120,11 @@ Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸
              │                         │
       ┌──────┴────────┐                │
       ▼               ▼                │
- F4 features ◐  OPEN-2 ✓─► F3 subj emb ✓│
+ F4 features ✓  OPEN-2 ✓─► F3 subj emb ✓│
       │               │                │
 OPEN-6 ✓ resolved ────┤                │
               ▼                        │
-        F5 eval branch ────────────────┤
+        F5 eval branch ▶ ──────────────┤
               │                        │
               └────────────┬───────────┘
                            ▼
@@ -561,7 +568,7 @@ deviations from the authors' own load path.
 
 ---
 
-### F4 — Per-trial image features for our stimuli ◐ CODE COMPLETE (2026-09-14) — the run is outstanding
+### F4 — Per-trial image features for our stimuli ✓ DONE (2026-09-15)
 
 Spec: [`spec/2026-09-14-eve-image-features/`](../2026-09-14-eve-image-features/)
 (requirements · plan · validation · **notes**). Implements Stage B; satisfies D4, D5, D7, D8;
@@ -595,7 +602,7 @@ around. 1804 tensors ≈ **11.3 GB** (`test` alone: 1062 ≈ 6.7 GB, sufficient 
 - [x] **The D4 gate is green on the real bundle**: `crosscheck_exp_keys()` agrees on **all 1804**
       trials against an independent `samples_df` derivation, 1804 distinct exp_keys, 1062 test /
       742 train, dense ids exactly `0..37`. Shown non-vacuous by corrupting a row.
-- [x] **78/78 pytest tests pass** on Windows CPU (`--bundle-dir` supplied from the dev machine's own
+- [x] **93/93 pytest tests pass** on Windows CPU (`--bundle-dir` supplied from the dev machine's own
       copy of the bundle, so Group 6 needed no cluster). No tracked file under `ISP/` or `SE-Net/`
       modified (D1, convention 2).
 - [x] **The run script follows the cluster's established staging pattern** — corrected after
@@ -627,10 +634,23 @@ around. 1804 tensors ≈ **11.3 GB** (`test` alone: 1062 ≈ 6.7 GB, sufficient 
 - [ ] **`SPLIT=train`**, only if F5 ever needs support-split features. `test.py` builds no
       train-split loader (§3.6), so this is optional; the extractor is resumable, so it would only
       fill the 742 gaps.
-- [ ] Run `tools/eve_prep/validate_features.py` on the cluster and paste its
-      `validation_report.json` numbers into the spec's `notes.md` §8, then flip this feature to
-      ✓ DONE. Validation Group 7's four deliberate failure runs and the `FORCE_FEATURES=1`
-      determinism check remain unexercised.
+- [x] **Data Validity green on the real cache — 2026-09-15, `validate_features.py`, 16 ok.**
+      1062 tensors, min file 6,293,103 B, std 0.3009–0.4472 all finite, **`min == 0.0`** post-ReLU,
+      sparsity 0.726–**0.827**–0.871, **all 1062 `feature_sha256` match** (FR8.2), no phantom keys,
+      all 1062 exp_keys round-trip through the store's **reverse** index, dense ids exactly `0..37`,
+      `fixations.json` unchanged since F2. **Per-trial keying confirmed on real tensors**:
+      within-name cosine **0.6063 / 0.7749 / 0.9603**, cross-name median **0.4504**, none
+      identical — OPEN-6 resolved in fact, not only by design. Report at
+      `data/eve_features/validation_report.json`.
+- [ ] **Cluster-side only, not blocking:** two bundle spot-checks
+      (`fixations_land_on_the_stimulus`, `subject_identity_survives`) and
+      `f3_embedding_untouched` still read `skip` — the first run was made from the `senet` env,
+      which lacks `evedataset`. Both properties **are** evidenced on the dev machine against the
+      same bundle (`tests/eve_prep/test_bundle_integration.py`, 10/10 with `--bundle-dir`); it is
+      the cluster-side confirmation that is outstanding. Re-run from `scanpath` inside an
+      allocation to close it.
+- [ ] Validation Group 7's four deliberate failure runs and the `FORCE_FEATURES=1` determinism
+      check remain unexercised — the clean run exercised the happy path only.
 - [ ] Validation Group 7's four deliberate failure runs, the `FORCE_FEATURES=1` determinism check,
       and the Data Validity block against the extracted cache.
 

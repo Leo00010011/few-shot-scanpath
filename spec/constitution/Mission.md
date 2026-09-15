@@ -146,8 +146,10 @@ image name, which OPEN-6 rules out. `tools/eve_prep/` *imports* the `ResNetCOCO`
 and transcribes only the three-line transform chain — a transcription **proven bit-identical** to
 `image_data()` by `torch.equal`, not assumed. It writes one `(768, 2048)` tensor per
 `(stimulus, participant)` trial, keyed by `exp_key`, from the exact screen capture that participant
-saw. **Code complete and 74/74 tests green as of 2026-09-14; the extraction run itself is
-outstanding.** Note that Stage B shares nothing with Stage C — its backbone is torchvision's Mask
+saw. **Stage B has run (2026-09-15)**: 1062 tensors for the scored split, 0 skipped, every
+D7 counter `0`, and 16 post-run Data Validity checks green — including all 1062
+`feature_sha256` matching and per-trial keying confirmed on the real tensors
+(within-name cosine median 0.775 against a cross-stimulus 0.450). Note that Stage B shares nothing with Stage C — its backbone is torchvision's Mask
 R-CNN body, not SE-Net's encoder, so none of F3's detectron2 machinery applies.
 
 **Stage C is the second, and

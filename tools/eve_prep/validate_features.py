@@ -78,6 +78,23 @@ class _Skip(Exception):
     """Raised by a check whose inputs are absent -- reported as skip, never as pass."""
 
 
+def _require_evedataset():
+    """Import ``EveBundle``, or skip.
+
+    A missing module means the check **could not run**, which is not the same as the
+    check failing -- and conflating them is how a green cache gets reported as broken.
+    Observed on F4's first validation run: the script was invoked from the ``senet``
+    env, where ``evedataset`` is not installed, and two sound checks read as FAIL.
+    """
+    try:
+        from evedataset import EveBundle
+    except ImportError as exc:
+        raise _Skip(
+            "evedataset is not importable in this env ({}) -- run this from the "
+            "ISP-side env (`scanpath`), where Stage B ran".format(exc))
+    return EveBundle
+
+
 def _load(path):
     return torch.load(path, map_location="cpu")
 
@@ -411,14 +428,27 @@ def validate(features_dir, bridge_dir, bundle_dir=None, senet_report=None,
         if not senet_report:
             raise _Skip("--senet-report not given")
         senet = load_json(senet_report)
-        emb = os.path.join(os.path.dirname(senet_report),
-                           os.path.basename(senet.get("embedding_path", "")))
-        if not os.path.isfile(emb):
-            raise _Skip("embedding tensor not beside {}".format(senet_report))
+        seed_dir = os.path.dirname(os.path.abspath(senet_report))
+        # The report names the tensor in `embedding_file` (F3 writes that key). Fall
+        # back to the lone .pt beside it rather than skipping on a key rename --
+        # silently skipping the F3 handshake is the failure mode this guards.
+        name = senet.get("embedding_file") or ""
+        emb = os.path.join(seed_dir, os.path.basename(name)) if name else ""
+        if not emb or not os.path.isfile(emb):
+            candidates = sorted(f for f in os.listdir(seed_dir)
+                                if f.endswith(".pt") and "_raw" not in f
+                                and "_absurd" not in f)
+            if len(candidates) != 1:
+                raise _Skip(
+                    "cannot identify F3's tensor beside {} (embedding_file={!r}, "
+                    "{} .pt candidates)".format(senet_report, name, len(candidates)))
+            emb = os.path.join(seed_dir, candidates[0])
         actual = sha256_file(emb)
         if actual != senet["embedding_sha256"]:
-            raise EvePrepError("F3's embedding now hashes to {}".format(actual))
-        return "F3's embedding unchanged, sha {}".format(actual[:16])
+            raise EvePrepError(
+                "F3's embedding {} now hashes to {} but senet_report.json says "
+                "{}".format(os.path.basename(emb), actual, senet["embedding_sha256"]))
+        return "{} unchanged, sha {}".format(os.path.basename(emb), actual[:16])
 
     checks.run("f3_embedding_untouched", f3_untouched)
 
@@ -428,9 +458,9 @@ def validate(features_dir, bridge_dir, bundle_dir=None, senet_report=None,
         """5 trials: the fixations must land on the photo, not the cream page."""
         if not bundle_dir:
             raise _Skip("--bundle-dir not given (scratch is gone after the job)")
-        from evedataset import EveBundle
-
-        bundle = EveBundle.load(bundle_dir)
+        if not os.path.isdir(bundle_dir):
+            raise _Skip("{} does not exist".format(bundle_dir))
+        bundle = _require_evedataset().load(bundle_dir)
         cream = np.array([245, 240, 210])
         by_trial = {(r["name"], int(r["subject"])): r for r in fixations}
         out = []
@@ -455,9 +485,9 @@ def validate(features_dir, bridge_dir, bundle_dir=None, senet_report=None,
     def subject_identity():
         if not bundle_dir:
             raise _Skip("--bundle-dir not given")
-        from evedataset import EveBundle
-
-        bundle = EveBundle.load(bundle_dir)
+        if not os.path.isdir(bundle_dir):
+            raise _Skip("{} does not exist".format(bundle_dir))
+        bundle = _require_evedataset().load(bundle_dir)
         by_key = {str(r.exp_key): str(r.subject)
                   for r in bundle.samples_df.itertuples(index=False)}
         to_eve = subject_id_map["to_eve"]
