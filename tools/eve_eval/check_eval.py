@@ -429,7 +429,18 @@ def main(argv=None):
     parser.add_argument("--bridge-dir", required=True)
     parser.add_argument("--senet-dir", required=True)
     parser.add_argument("--feature-dir", required=True)
-    parser.add_argument("--weights-dir", required=True)
+    parser.add_argument("--weights-dir", required=True,
+                        help="the branch's evaluation_dir; the checkpoint is expected "
+                             "at <weights-dir>/checkpoints/checkpoint_best.pth, which "
+                             "bash/test_eve.sh creates as a symlink to the released "
+                             "OSIE one")
+    parser.add_argument("--checkpoint", default=None,
+                        help="the released checkpoint itself, when the branch symlink "
+                             "does not exist yet -- which is the normal state when the "
+                             "preflight is run on its own, BEFORE the run script has "
+                             "ever executed. Point it at the OSIE free-viewing "
+                             "checkpoint_best.pth; a COCO-Search18 one is "
+                             "task-conditioned and does not belong on this path.")
     parser.add_argument("--subject-num", type=int, default=3)
     parser.add_argument("--num-fewshot", type=int, default=10)
     parser.add_argument("--split", default="test")
@@ -442,7 +453,7 @@ def main(argv=None):
     report = check_eval(args.bridge_dir, args.senet_dir, args.feature_dir,
                         args.weights_dir, subject_num=args.subject_num,
                         num_fewshot=args.num_fewshot, fast=args.fast,
-                        split=args.split)
+                        checkpoint_path=args.checkpoint, split=args.split)
 
     if args.out:
         out_dir = os.path.dirname(os.path.abspath(args.out))

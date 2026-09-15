@@ -521,8 +521,13 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
   still goes to beegfs.
 - Its CPU preflight, runnable from the repo root on Windows or a login node:
   `py tools/eve_eval/check_eval.py --bridge-dir DIR --senet-dir DIR --feature-dir DIR
-  --weights-dir DIR [--fast] [--out preflight.json]` — exit 0 = every check passed, 1 = at least one
-  failed and **all** of them are printed. `preflight.json` is written either way.
+  --weights-dir DIR [--checkpoint PATH] [--fast] [--out preflight.json]` — exit 0 = every check
+  passed, 1 = at least one failed and **all** of them are printed. `preflight.json` is written
+  either way. **Pass `--checkpoint` when running it on its own**: the checkpoint is expected at
+  `<weights-dir>/checkpoints/checkpoint_best.pth`, which is a symlink `bash/test_eve.sh` creates to
+  the released **OSIE free-viewing** `checkpoint_best.pth` — so before the script has ever run, that
+  path does not exist and FR3.1 fails on a file that is not really missing. A COCO-Search18
+  checkpoint is task-conditioned and does not belong on this path.
 - Its tests: `py -m pytest tests/eve_eval -q` (104 tests, CPU, Windows). The `bridge`-marked ones
   read the real `data/eve_bridge/` and skip when it is absent.
 - **Compile on the login node, never under `salloc`.** The cluster has a fair-use policy and holding a

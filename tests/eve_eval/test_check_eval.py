@@ -353,3 +353,33 @@ def test_check_eval_imports_no_torch_and_no_evedataset():
                           stderr=subprocess.PIPE, cwd=REPO_ROOT)
     assert proc.returncode == 0, proc.stderr.decode(errors="replace")
     assert proc.stdout.split() == [b"False", b"False"], proc.stdout
+
+
+def test_cli_accepts_an_explicit_checkpoint(case, tmp_path):
+    """The preflight must be runnable BEFORE the run script has ever executed.
+
+    `<weights-dir>/checkpoints/checkpoint_best.pth` is a symlink bash/test_eve.sh
+    creates to the released OSIE checkpoint, so on a fresh cluster checkout it does not
+    exist yet and the standalone preflight would fail on FR3.1 for a file that is not
+    actually missing. --checkpoint points at the released one directly.
+    """
+    paths = case()
+    released = tmp_path / "released_checkpoint_best.pth"
+    released.write_bytes(b"the released OSIE free-viewing checkpoint")
+    out = tmp_path / "preflight_explicit.json"
+
+    proc = subprocess.run(
+        [sys.executable, os.path.join(TOOLS, "eve_eval", "check_eval.py"),
+         "--bridge-dir", paths["bridge_dir"], "--senet-dir", paths["senet_dir"],
+         "--feature-dir", paths["feature_dir"],
+         "--weights-dir", os.path.join(paths["weights_dir"], "no-symlink-here"),
+         "--checkpoint", str(released), "--out", str(out)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=REPO_ROOT)
+
+    with open(str(out)) as fh:
+        report = json.load(fh)
+    # The cohort constants make the CLI path fail on counts over this 6-image fixture;
+    # what matters is that the checkpoint is NOT among the failures and was hashed.
+    assert not [f for f in report["failures"] if "checkpoint" in f], report["failures"]
+    assert report["sha256"]["checkpoint"]
+    assert report["paths"]["checkpoint"] == str(released)
