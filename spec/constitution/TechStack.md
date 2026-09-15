@@ -1,7 +1,7 @@
 # Tech Stack
 
 > Constitution file 2 of 3. Read together with [Mission.md](Mission.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-14
+> Last updated: 2026-09-15
 
 ---
 
@@ -21,6 +21,45 @@
 > particular the ground-truth heatmap cache — must be re-validated under the `isp` env's numpy 1.23.5
 > before F5 relies on it, since float32 promotion and structured-array behaviour is exactly what the
 > pin exists for.
+
+### 1.0 Which environment for which stage ◀ read this first (added 2026-09-15)
+
+| stage | feature | env | needs Detectron2 / MSDeformAttn? |
+|---|---|---|---|
+| **A** bridge → `fixations.json`, GT heatmaps | F2 ✓ | Windows CPU (`py`) | no |
+| **B** per-trial image features | F4 ✓ | **`scanpath`** (ISP-side) | **no** |
+| **C** subject embeddings | F3 ✓ | **`senet`** | **yes — only here** |
+| **D+E** inference + metrics | F5 | **`scanpath`** (ISP-side) | no |
+| offline re-scoring | F6 | any CPU python | no |
+
+**`detectron2` and `MSDeformAttn` are imported in exactly two places in this repository**:
+`tools/eve_senet/` and `SE-Net/src/models.py`. Nothing in the `ISP/` tree touches either.
+So the `senet` env — the project's most expensive install (§1.3) — exists for **Stage C alone**.
+
+> **The trap that caused real confusion (2026-09-15).** Stage B and Stage C both have something
+> called an "encoder", and they are **completely unrelated networks**:
+> - Stage B: `torchvision.models.detection.maskrcnn_resnet50_fpn(...).backbone.body` — stock
+>   torchvision, nothing compiled, `ResNetCOCO` in `preprocess/feature_extractor.py`.
+> - Stage C: SE-Net's `ImageFeatureEncoder` — a Mask2Former-style model on Detectron2 with an
+>   MSDeformAttn pixel decoder, needing both CUDA extensions.
+>
+> They share no weights, no code and no init files. Earlier revisions of
+> [Roadmap.md](Roadmap.md)'s dependency table said "F4 (same encoder)" and F3's notes said "F4
+> builds the same encoder"; **both were wrong**, and F4's spec FR1.1 records the correction. If a
+> future feature seems to need `senet`, check which of these two encoders it actually builds
+> before paying the install cost again.
+
+**`senet` is, as of 2026-09-15, effectively retired.** F3 produced its artefacts at seeds 0 and 1,
+and F5/F6/F7 consume the resulting `(38, 384)` tensor as a **file** (`--user_emb_path`) while
+running in `scanpath`. The only thing that brings `senet` back is re-running F3 — a further
+embedding seed, or a regenerated bridge, since the tensor is sha-gated against `fixations.json`.
+**Keep the env; you should not need to touch it for F5.**
+
+And the cost was not optional: OPEN-2 settled that we generate our own embeddings rather than
+borrowing the released OSIE `(10, 384)` tensor, which encodes somebody else's subjects and would
+sever P2's claim that prediction *i* is personalised to subject *i*. The `senet` day bought that.
+
+---
 
 The repo requires **two separate conda environments** — they are not compatible and must not be merged:
 

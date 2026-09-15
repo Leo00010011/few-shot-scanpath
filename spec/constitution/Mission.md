@@ -1,7 +1,7 @@
 # Mission
 
 > Constitution file 1 of 3. Read together with [TechStack.md](TechStack.md) and [Roadmap.md](Roadmap.md).
-> Last updated: 2026-09-14
+> Last updated: 2026-09-15
 
 ---
 
@@ -149,8 +149,13 @@ and transcribes only the three-line transform chain — a transcription **proven
 saw. **Stage B has run (2026-09-15)**: 1062 tensors for the scored split, 0 skipped, every
 D7 counter `0`, and 16 post-run Data Validity checks green — including all 1062
 `feature_sha256` matching and per-trial keying confirmed on the real tensors
-(within-name cosine median 0.775 against a cross-stimulus 0.450). Note that Stage B shares nothing with Stage C — its backbone is torchvision's Mask
-R-CNN body, not SE-Net's encoder, so none of F3's detectron2 machinery applies.
+(within-name cosine median 0.775 against a cross-stimulus 0.450).
+
+**Stage B shares nothing with Stage C.** Its backbone is torchvision's Mask R-CNN body; SE-Net's
+`ImageFeatureEncoder` is a Detectron2 + MSDeformAttn model. Two unrelated networks, both called
+"encoder" — the single most expensive confusion available in this repo, since it invites rebuilding
+the `senet` env for work that does not need it. [TechStack.md](TechStack.md) **§1.0** maps every
+stage to its environment.
 
 **Stage C is the second, and
 OPEN-2 settled it on 2026-09-10: we generate our own embeddings** rather than loading a released
@@ -178,8 +183,11 @@ of **38 participants — 354 scored stimuli (1062 cells at 3 subjects per image)
 
 **OPEN-6 is resolved as of 2026-09-14 and no open decision blocks any stage.** F4 keys features by
 trial, so the 925 `stimulus_image_conflict`s have nothing left to contend over and the bridge's
-per-name `stimuli/*.jpg` export is simply unused downstream. What F5 waits on is F4's extraction
-**run**, not its design.
+per-name `stimuli/*.jpg` export is simply unused downstream.
+
+**Stages A, B and C are all complete as of 2026-09-15, and F5 is unblocked**: every input Stage D
+needs now exists as an artefact on the cluster. See [Roadmap.md](Roadmap.md) **§0** for the artefact
+table, the environment map, and the traps F5 inherits.
 
 ---
 

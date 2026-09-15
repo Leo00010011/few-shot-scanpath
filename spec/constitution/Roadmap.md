@@ -1,8 +1,47 @@
 # Roadmap
 
 > Constitution file 3 of 3. Read together with [Mission.md](Mission.md) and [TechStack.md](TechStack.md).
-> Last updated: 2026-09-14
->
+> Last updated: 2026-09-15
+
+---
+
+## 0. Start here — state of the project, 2026-09-15
+
+**F0–F4 are closed. F5 is next and is unblocked. No open decision blocks any feature.**
+Every input Stage D needs now exists on the cluster as an artefact:
+
+| input | artefact | contract |
+|---|---|---|
+| scanpaths | `data/eve_bridge/fixations.json` | sha `46c6926f…`, 1804 trials, 38 subjects |
+| GT heatmaps | `data/eve_bridge/gt_heatmaps.h5` | positional; row *i* = record *i* |
+| subject embeddings | `data/eve_senet/seed0/eve_fewshot_user_embedding_10_seed0.pt` | `(38, 384)`, sha `e904a165…` |
+| image features | `data/eve_features/image_features/<exp_key>.pth` | **per trial**, 1062 × `(768, 2048)` |
+| task embedding | `data/eve_features/embeddings.npy` | byte-identical to OSIE's |
+
+**All of `data/` is git-ignored**, so none of it arrives by `git pull`. A fresh cluster checkout
+has code only; the artefacts are shipped by hand (F3's lesson, and every run script's preconditions
+fail loudly on it).
+
+**The three things most likely to waste a day, if you read nothing else:**
+
+1. **Check which env a task needs before building anything** —
+   [TechStack.md](TechStack.md) **§1.0**. `senet` (Detectron2 + MSDeformAttn) is **Stage C only**
+   and is effectively retired; Stages B, D and E all run in `scanpath`. "Encoder" means two
+   unrelated networks in this repo.
+2. **Cluster facts cost more time than code has** — [TechStack.md](TechStack.md) **§1.3**:
+   `/mnt/imagenes` is invisible to compute nodes, `/tmp` is node-local, bulk read data is staged to
+   `$LOCAL_SCRATCH`, `conda activate scanpath` needs `my_env.ext4` mounted, `set -u` breaks
+   `conda activate`, and `conda.sh` must be sourced by explicit path.
+3. **The frozen metric code is frozen (D1)** — `utils/evaluation.py`, `utils/evaltools/*`. Change
+   the call site, never the function. The whole mission depends on it.
+
+**F5's live traps**, all already written into its section below: the `i_batch > 100` cap is now
+**live** (354 scored images would silently truncate to 101); `--fewshot_subject` must be ascending
+or the cohort is silently permuted; `origin_size=(1080, 1920)` must be passed explicitly or every
+coordinate is mis-scaled; and features must be loaded **per trial**, by `exp_key` concatenation.
+
+---
+
 > **F1 CLOSED 2026-09-09 — accepted with a flagged gap (OPEN-7).** The pipeline ran end to end, all
 > three seeds are computed, and the run record is generated from artefacts: SM **0.3704 ± 0.0041**,
 > MM **0.8010 ± 0.0019**, SED **7.3438 ± 0.0381**. Against the paper's n=10 ISP-SENet row
@@ -990,11 +1029,12 @@ reproduction ran ~1 % low to begin with.
 | ISP-SENet checkpoints | already in `weights/` (git-ignored) | F1, F5 |
 | ~~COCO-FreeView stimuli / fixation labels~~ | ~~staged on the cluster~~ | ~~F1~~ — dropped 2026-09-09, see §4 |
 | ~~OSIE stimulus images (800×600 `.jpg`)~~ | NUS-VIP repo — **obtained 2026-09-09**, staged flat at `$PROJECT_DIR/data/stimuli` (git-ignored) | ~~F1~~ ✓ |
-| ~~Detectron2~~ | source install, v0.6 — **obtained 2026-09-14**, non-editable from shared storage (TechStack §1.3) | ~~F3~~ ✓ |
-| ~~MSDeformAttn~~ | `SE-Net/src/pixel_decoder/ops/make.sh` — **built 2026-09-14** with `FORCE_CUDA=1` (TechStack §1.3) | ~~F3~~ ✓ |
-| CUDA toolkit for compiling | `module load CUDA/11.6` — **not** 12.4, and absent from `PATH` by default | F3 ✓, any future extension build |
+| ~~Detectron2~~ | source install, v0.6 — **obtained 2026-09-14**, non-editable from shared storage (TechStack §1.3) | ~~F3~~ ✓ — **Stage C only**, see §1.0 |
+| ~~MSDeformAttn~~ | `SE-Net/src/pixel_decoder/ops/make.sh` — **built 2026-09-14** with `FORCE_CUDA=1` (TechStack §1.3) | ~~F3~~ ✓ — **Stage C only**, see §1.0 |
+| CUDA toolkit for compiling | `module load CUDA/11.6` — **not** 12.4, and absent from `PATH` by default | F3 ✓. **Nothing else compiles**: Stage B and Stage D+E build no extensions |
 | SE-Net encoder init pickles — `data/M2F_R50.pkl`, `data/M2F_R50_MSDeformAttnPixelDecoder.pkl` | **distributed nowhere** — not in the repo, the checkpoint bundle, or the READMEs' Drive folders. **Derived from the released checkpoint** by `tools/eve_senet/make_backbone_init.py` (2026-09-14); `ImageFeatureEncoder` strict-loads both with their `os.path.exists` guards commented out, so a missing one is fatal (TechStack §3 item 4) | F3 ✓ **only** — *not* F4. Corrected 2026-09-14: Stage B's backbone is torchvision's `maskrcnn_resnet50_fpn(...).backbone.body` and shares no weights, code or init files with SE-Net's `ImageFeatureEncoder` (F4 spec FR1.1) |
 | ~~`stsb-roberta-base-v2`~~ | ~~sentence-transformers hub~~ — **not needed**: every branch ships `embeddings.npy`, `text_data()` is never called, and `bash/test_osie.sh` stubs the import (TechStack §1.1) | ~~F1~~, F4 only if regenerating |
 | Mask R-CNN R50-FPN COCO weights | torchvision download — **obtained 2026-09-09** (Stage B ran) | ~~F1~~ ✓, F4 |
-| `evedataset` wheel + `bundle.h5` | `eve_shared/EveDataset/` (installed, git-ignored) | F2 |
-| cluster allocation with an NVIDIA GPU | — (F1 ran on `hpc-gpu1`, env `scanpath`; F3's env verified on `hpc-gpu3`. Nodes are **Tesla V100S-PCIE-32GB**, `sm_70`, driver 560.35.03, system gcc 8.5.0) | ~~F1~~ ✓, F3, F4, F5 |
+| `evedataset` wheel + `bundle.h5` | `eve_shared/EveDataset/` (installed, git-ignored) | F2, **F4** (the declared D2 deviation — it reads the bundle directly; must be installed in `scanpath`, not only in `senet`) |
+| EVE bundle archive on beegfs | staged by `bash/extract_eve_features.sh` to `$LOCAL_SCRATCH` and expanded there; the beegfs original is only ever read | ~~F4~~ ✓ |
+| cluster allocation with an NVIDIA GPU | — (F1 ran on `hpc-gpu1`, env `scanpath`; F3's env verified on `hpc-gpu3`; F4 ran on `hpc-gpu1`, env `scanpath`. Nodes are **Tesla V100S-PCIE-32GB**, `sm_70`, driver 560.35.03, system gcc 8.5.0) | ~~F1~~ ✓, ~~F3~~ ✓, ~~F4~~ ✓, F5 |
