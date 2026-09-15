@@ -117,14 +117,40 @@ def test_bundle_is_staged_to_node_local_scratch(script):
     assert '$LOCAL_SCRATCH' not in code.split('OUT_DIR="${OUT_DIR:-')[1].split("}")[0]
 
 
-def test_face_crops_are_never_staged(script):
-    """F4 needs bundle.h5 + stimuli/ (4.2 GB), not face_crops/ (11 GB).
+def test_the_beegfs_archive_is_only_ever_copied(script):
+    """The original tar on beegfs is shared. This job reads it and nothing else.
 
-    `get_stimulus()` resolves samples_df's "stimuli/<exp_key>.png" against the bundle
-    dir; nothing on this path opens a face crop. Staging EyeNet's own tar would move
-    11 GB of data F4 never reads.
+    The script does remove the *scratch copy* it made, to give the expanded tree its
+    space back. That `rm` must be guarded, because if BUNDLE_TAR itself lived on the
+    staging filesystem the two paths would be the same file.
     """
-    assert not [l for l in _command_lines(script) if "face_crops" in l]
+    lines = _command_lines(script)
+
+    # Nothing moves, renames or deletes BUNDLE_TAR.
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(("rm ", "mv ")) or " rm " in stripped:
+            assert "$BUNDLE_TAR" not in stripped, stripped
+    assert not [l for l in lines if "--remove-source-files" in l]
+
+    # The only rm is of $STAGED_TAR, and it sits under the not-the-same-file guard.
+    removals = [l for l in lines if l.strip().startswith("rm ")]
+    assert removals, "the scratch copy should be reclaimed"
+    for line in removals:
+        assert "$STAGED_TAR" in line, line
+    assert any('"$STAGED_TAR" != "$BUNDLE_TAR"' in l for l in lines), (
+        "the rm must be guarded against BUNDLE_TAR living on the staging filesystem")
+
+
+def test_the_archive_is_expanded_on_scratch_not_beegfs(script):
+    """Copy first, expand second -- unpacking many small files on beegfs is the slow
+    part, and doing it on node-local disk is the entire reason for the copy."""
+    lines = _command_lines(script)
+    copy = next(i for i, l in enumerate(lines) if l.strip().startswith("rsync"))
+    expand = next(i for i, l in enumerate(lines) if l.strip().startswith("tar -xf"))
+    assert copy < expand
+    assert "$STAGED_TAR" in lines[expand], "expand the scratch copy, not the original"
+    assert '-C "$STAGE_ROOT/"' in lines[expand]
 
 
 def test_env_image_is_mounted_before_activation(script):

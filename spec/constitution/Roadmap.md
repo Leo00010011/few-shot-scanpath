@@ -600,16 +600,21 @@ around. 1804 tensors ≈ **11.3 GB** (`test` alone: 1062 ≈ 6.7 GB, sufficient 
       modified (D1, convention 2).
 - [x] **The run script follows the cluster's established staging pattern** — corrected after
       reading `~/projects/EyeNet-Pipeline/whole_train.sh`, which contradicted four of its
-      assumptions: the bundle is staged from a tar on beegfs to **`$LOCAL_SCRATCH`** (1804 random
-      PNG reads do not belong on the network filesystem), F4 needs **its own tar** of
-      `bundle.h5` + `stimuli/` and **not** `face_crops/` (11 GB it never opens), `conda activate
-      scanpath` needs **`my_env.ext4` mounted** first (non-fatal, as `test_osie.sh` has it), and
-      `conda.sh` must be sourced by **explicit path** rather than `$(conda info --base)`. All four
-      are now in [TechStack.md](TechStack.md) §1.3 as cluster facts 4–6, since **F5 inherits them**.
-- [ ] **The extraction run itself**, under `salloc`. Build the tar once on the login node
-      (`tar -cf $HOME/projects/bundle_stimuli.tar bundle/bundle.h5 bundle/stimuli`) and ship F2's
-      artefacts by hand — `data/` is git-ignored, so nothing under it arrives by `git pull`
-      (F3's lesson; the script's preconditions fail loudly on it).
+      assumptions: the bundle archive is copied from beegfs to **`$LOCAL_SCRATCH`** and
+      **expanded there** — unpacking thousands of small files on a network filesystem is the slow
+      part, and 1804 random PNG reads do not belong there either — `conda activate scanpath` needs
+      **`my_env.ext4` mounted** first (non-fatal, as `test_osie.sh` has it), and `conda.sh` must be
+      sourced by **explicit path** rather than `$(conda info --base)`. All of it is now in
+      [TechStack.md](TechStack.md) §1.3 as cluster facts 4–6, since **F5 inherits them**.
+      The archive is used **as-is and never repacked**, and the beegfs original is only ever read:
+      the script removes only the scratch copy it made, guarded against the two paths being one
+      file. *(An intermediate version of this bullet proposed a narrowed `bundle.h5` + `stimuli/`
+      tar. That optimised the wrong axis and was dropped 2026-09-15 — see the spec's `notes.md`
+      §4a.2.)*
+- [ ] **The extraction run itself**, under `salloc` — `SPLIT=test bash bash/extract_eve_features.sh`.
+      Nothing to prepare but F2's four artefacts (2.7 MB; F3 already shipped them), since `data/` is
+      git-ignored and nothing under it arrives by `git pull`. The script stages the bundle archive
+      itself and its preconditions fail loudly if anything is missing.
 - [ ] Validation Group 7's four deliberate failure runs, the `FORCE_FEATURES=1` determinism check,
       and the Data Validity block against the extracted cache.
 

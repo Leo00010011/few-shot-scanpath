@@ -38,16 +38,25 @@
 # the D5 record). A read-only data copy re-staged per job is what scratch is for.
 # Everything written -- OUT_DIR, versions.txt, stdout.txt -- still goes to beegfs.
 #
-# F4 NEEDS A DIFFERENT TAR FROM EyeNet's. `bundle.h5` (0.23 GB) + `stimuli/` (4.0 GB)
-# and NOT `face_crops/` (11 GB), which F4 never opens -- get_stimulus() resolves
-# samples_df's `stimulus_path` = "stimuli/<exp_key>.png" against the bundle dir, and
-# nothing on this path touches a face crop. Build it once on the login node:
+# THE EXISTING TAR IS USED AS-IS -- nothing is repacked. Extracting thousands of
+# small files ON beegfs is what is slow, not the tar itself, so the archive is copied
+# whole to scratch and expanded there. That is the same order of operations
+# whole_train.sh uses, and the reason it uses it.
 #
-#   cd <wherever the bundle lives>
-#   tar -cf $HOME_DIR/projects/bundle_stimuli.tar bundle/bundle.h5 bundle/stimuli
+# **The beegfs tar is only ever READ.** `rsync` copies it; the original is never
+# moved, renamed or deleted. The only thing this script removes is the *scratch copy*
+# it made, after extraction, to give the extracted tree its space back -- and even
+# that is skipped if BUNDLE_TAR already lives on the staging filesystem.
+#
+# F4 reads only `bundle.h5` + `stimuli/` from the expanded bundle; `face_crops/` is
+# extracted along with everything else and simply never opened. (get_stimulus()
+# resolves samples_df's `stimulus_path` = "stimuli/<exp_key>.png" against the bundle
+# dir.) If scratch is ever tight, appending `bundle/bundle.h5 bundle/stimuli` to the
+# tar -xf below extracts just those members -- but the default is the whole archive,
+# because unpacking everything is simpler and scratch is sized for it.
 #
 # Set STAGE_BUNDLE=0 to skip staging entirely and point BUNDLE_DIR at an existing
-# copy (a beegfs one works, just slower).
+# expanded copy (a beegfs one works, just slower).
 #
 # Every tunable is overridable from the environment. No absolute path appears in any
 # .py (working convention 4).
@@ -59,7 +68,10 @@ PROJECT_DIR="${PROJECT_DIR:-$HOME_DIR/projects/few-shot-scanpath}"
 ISP_ENV="${ISP_ENV:-scanpath}"
 LOCAL_SCRATCH="${LOCAL_SCRATCH:-/tmp/${USER:-evefeat}}"
 STAGE_BUNDLE="${STAGE_BUNDLE:-1}"
-BUNDLE_TAR="${BUNDLE_TAR:-$HOME_DIR/projects/bundle_stimuli.tar}"
+# The EVE bundle archive on beegfs, used as-is. This default is the path
+# EyeNet-Pipeline/whole_train.sh stages from; override BUNDLE_TAR if the archive
+# you want lives elsewhere or under another name.
+BUNDLE_TAR="${BUNDLE_TAR:-$HOME_DIR/projects/bundle_chunk.tar}"
 BUNDLE_DIR="${BUNDLE_DIR:-$LOCAL_SCRATCH/data/bundle}"
 BRIDGE_DIR="${BRIDGE_DIR:-$PROJECT_DIR/data/eve_bridge}"
 OUT_DIR="${OUT_DIR:-$PROJECT_DIR/data/eve_features}"
@@ -123,30 +135,49 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$STAGE_BUNDLE" = "1" ]; then
     [ -f "$BUNDLE_TAR" ] || {
-        echo "FATAL: $BUNDLE_TAR does not exist -- build it on the login node with" >&2
-        echo "  tar -cf $BUNDLE_TAR bundle/bundle.h5 bundle/stimuli" >&2
-        echo "(bundle.h5 + stimuli/ only; face_crops/ is 11 GB F4 never opens)," >&2
-        echo "or set STAGE_BUNDLE=0 and point BUNDLE_DIR at an existing copy." >&2
+        echo "FATAL: $BUNDLE_TAR does not exist." >&2
+        echo "Point BUNDLE_TAR at the EVE bundle archive on beegfs, or set" >&2
+        echo "STAGE_BUNDLE=0 and point BUNDLE_DIR at an already-expanded copy." >&2
         exit 1
     }
     STAGE_ROOT="$(dirname "$BUNDLE_DIR")"
     mkdir -p "$STAGE_ROOT"
-    SCRATCH_FREE_KB="$(df -Pk "$STAGE_ROOT" | awk 'NR==2 {print $4}')"
-    TAR_KB="$(du -k "$BUNDLE_TAR" | awk '{print $1}')"
-    # tar + its extracted copy coexist during extraction, hence the doubling.
-    if [ "$SCRATCH_FREE_KB" -lt $((TAR_KB * 2)) ]; then
-        echo "FATAL: $STAGE_ROOT has ${SCRATCH_FREE_KB} KB free; staging needs about" >&2
-        echo "$((TAR_KB * 2)) KB (the tar plus its extracted copy)." >&2
-        exit 1
-    fi
+    STAGED_TAR="$STAGE_ROOT/$(basename "$BUNDLE_TAR")"
+
     if [ -f "$BUNDLE_DIR/bundle.h5" ]; then
-        echo "-- bundle already staged at $BUNDLE_DIR; skipping rsync/extract"
+        echo "-- bundle already expanded at $BUNDLE_DIR; skipping copy and extract"
     else
-        echo "-- staging $BUNDLE_TAR -> $STAGE_ROOT (keeps 1804 PNG reads off beegfs)"
+        # Space: the copied archive and its expanded tree coexist until the copy is
+        # removed, so budget for both. The expansion is larger than the archive when
+        # the payload is already-compressed PNGs, hence the 2.5x rather than 2x.
+        TAR_KB="$(du -k "$BUNDLE_TAR" | awk '{print $1}')"
+        NEED_STAGE_KB=$(( TAR_KB * 5 / 2 ))
+        SCRATCH_FREE_KB="$(df -Pk "$STAGE_ROOT" | awk 'NR==2 {print $4}')"
+        if [ "$SCRATCH_FREE_KB" -lt "$NEED_STAGE_KB" ]; then
+            echo "FATAL: $STAGE_ROOT has ${SCRATCH_FREE_KB} KB free; staging needs" >&2
+            echo "about ${NEED_STAGE_KB} KB (the copied archive plus its expansion)." >&2
+            echo "Narrow the extract by appending 'bundle/bundle.h5 bundle/stimuli'" >&2
+            echo "to the tar -xf in this script -- they are all F4 reads." >&2
+            exit 1
+        fi
+
+        # COPY, never move: the beegfs archive is shared and read-only to this job.
+        echo "-- copying $BUNDLE_TAR -> $STAGE_ROOT/ (the beegfs original is untouched)"
         rsync -ah --progress "$BUNDLE_TAR" "$STAGE_ROOT/"
-        tar -xf "$STAGE_ROOT/$(basename "$BUNDLE_TAR")" -C "$STAGE_ROOT/" \
+
+        # Expanding thousands of small files is the slow part, and doing it HERE --
+        # on node-local disk rather than on beegfs -- is the whole point of the copy.
+        echo "-- expanding $(basename "$BUNDLE_TAR") on local scratch"
+        tar -xf "$STAGED_TAR" -C "$STAGE_ROOT/" \
             --checkpoint=2000 --checkpoint-action=echo="   extracted %u files"
-        rm -f "$STAGE_ROOT/$(basename "$BUNDLE_TAR")"
+
+        # Reclaim the archive's space -- but only the SCRATCH COPY this script made.
+        # The guard is not decorative: if BUNDLE_TAR were itself on the staging
+        # filesystem, these two paths would be the same file and this would delete
+        # the original.
+        if [ "$STAGED_TAR" != "$BUNDLE_TAR" ]; then
+            rm -f "$STAGED_TAR"
+        fi
     fi
 fi
 

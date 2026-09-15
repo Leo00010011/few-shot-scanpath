@@ -142,14 +142,26 @@ a failed allocation to discover.
    A **read-only data copy re-staged per job** is what scratch is for. Everything F4
    *writes* still goes to beegfs.
 
-2. **F4 needs a different tar from EyeNet's.** The bundle is `bundle.h5` (0.23 GB) +
-   `stimuli/` (4.0 GB) + `face_crops/` (11 GB). F4 opens **only** the first two:
-   `get_stimulus()` resolves `samples_df`'s `stimulus_path` — verified to be
-   `"stimuli/<exp_key>.png"` — against the bundle dir, and nothing on this path
-   touches a face crop. EyeNet's `bundle_chunk.tar` is built for `get_face_crop()`
-   and would move 11 GB F4 never reads. Build F4's with
-   `tar -cf bundle_stimuli.tar bundle/bundle.h5 bundle/stimuli`; a test asserts no
-   command line in the script mentions `face_crops`.
+2. **The existing archive is used as-is — and what is slow is the *expansion*, not
+   the copy.** *(Corrected 2026-09-15 on the user's instruction; the first version of
+   this note had it wrong.)* The bundle ships as a tar on beegfs, and unpacking
+   thousands of small files onto a network filesystem is the expensive part. Copying
+   the whole archive to scratch and expanding it **there** is what `whole_train.sh`
+   does and why. My first fix proposed repacking a narrowed
+   `bundle_stimuli.tar` (`bundle.h5` + `stimuli/`, skipping the 11 GB
+   `face_crops/`); that optimises the wrong axis — it saves local disk that is sized
+   for it, at the cost of a repack every time the bundle changes, and it makes the
+   run depend on a hand-built artefact. The whole archive is extracted and the parts
+   F4 does not read are simply never opened. Narrowing is left as a named fallback on
+   the `tar -xf` for a tight-scratch day.
+
+   **The beegfs archive is only ever read.** `rsync` copies it; nothing moves,
+   renames or deletes it. The script reclaims the *scratch copy* it made after
+   extraction, under a guard against `BUNDLE_TAR` itself living on the staging
+   filesystem — where the two paths would be the same file and the `rm` would take
+   the original. Two tests pin this: one that no `rm`/`mv` line mentions
+   `$BUNDLE_TAR` and that the removal is guarded, one that the copy precedes the
+   expansion and that it is the scratch copy being expanded.
 
 3. **`conda activate scanpath` needs the env image mounted first.** `scanpath` lives
    inside `my_env.ext4`; `bash/test_osie.sh` mounts it with `sudo mount_image.py
@@ -230,12 +242,12 @@ a failed allocation to discover.
 1. **The run**, under `salloc`: `bash bash/extract_eve_features.sh` (or
    `SPLIT=test` for the 1062 scored trials at ~6.7 GB — sufficient for F5, since
    `test.py` never builds a train-split loader).
-2. **Build F4's bundle tar and ship F2's artefacts.** `data/` is git-ignored, so
-   nothing under it arrives by `git pull` — F3's lesson, and the run script's
-   preconditions fail loudly on it. On the login node:
-   `tar -cf $HOME/projects/bundle_stimuli.tar bundle/bundle.h5 bundle/stimuli`
-   (**not** `face_crops/` — 11 GB F4 never opens; see §4a). The script rsyncs it to
-   `$LOCAL_SCRATCH` and extracts it there.
+2. **Confirm F2's four artefacts are on the cluster** — `fixations.json`,
+   `gt_heatmaps.h5`, `subject_id_map.json`, `bridge_report.json`, 2.7 MB in total and
+   **not** the 306 MB `stimuli/` (FR11.4 forbids F4 using it). F3 already shipped
+   them; `data/` is git-ignored, so they do not arrive by `git pull`, and the run
+   script's preconditions fail loudly if they are missing. **Nothing else to
+   prepare** — the script stages the bundle archive itself.
 3. **Validation Group 7's four deliberate failure runs** (missing `bundle.h5`,
    missing `stimuli/`, missing `gt_heatmaps.h5`, insufficient space) and the
    `FORCE_FEATURES=1` determinism check, which need the cluster.

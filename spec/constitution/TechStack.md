@@ -242,11 +242,17 @@ inputs to scratch, write outputs to beegfs. `bash/test_osie.sh` already had the 
 of this (`LOCAL_SCRATCH="${LOCAL_SCRATCH:-/tmp/${USER:-osie}}"` for its Stage B symlink
 farm); F4 makes it load-bearing, because it reads 1804 PNGs of ~1.3 MB at random.
 
-**Take only what you read.** The bundle is `bundle.h5` (0.23 GB) + `stimuli/` (4.0 GB)
-+ `face_crops/` (11 GB). F4 opens only the first two — `get_stimulus()` resolves
-`samples_df`'s `stimulus_path` (`"stimuli/<exp_key>.png"`) against the bundle dir —
-so it builds its **own** tar rather than reusing EyeNet's, which is built for
-`get_face_crop()`. Staging the wrong one moves 11 GB nothing reads.
+**Copy the archive, expand it on scratch, and repack nothing.** The bundle ships as a
+tar on beegfs, and it is **expanding** it — thousands of small files — that is slow on
+a network filesystem, not the archive itself. So the whole tar is copied to scratch and
+unpacked there. Do not build a narrowed tar per consumer: F4 reads only `bundle.h5`
+(0.23 GB) + `stimuli/` (4.0 GB) and never opens `face_crops/` (11 GB), but extracting
+the extra costs local disk that is sized for it, while maintaining a second archive
+costs a repack every time the bundle changes. If scratch is ever tight, name the
+members on the `tar -xf` instead. **The beegfs archive is read-only to a job**: copy,
+never move; and a script that reclaims its scratch copy must guard against
+`BUNDLE_TAR` already living on the staging filesystem, where the two paths are one
+file.
 
 **`conda activate scanpath` needs `my_env.ext4` mounted first.** The `scanpath` env
 lives inside an ext4 image: `cd "$HOME_DIR" && sudo mount_image.py my_env.ext4 --rw`.
@@ -546,16 +552,16 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
   extraction → post-check, and the first, third and fifth gate on **exit codes**. `SPLIT=test` is
   sufficient for F5: `test.py` never builds a train-split loader (§3.6).
 
-  **Build F4's bundle tar once, on the login node**, then let the script stage it:
-  ```
-  tar -cf $HOME/projects/bundle_stimuli.tar bundle/bundle.h5 bundle/stimuli
-  ```
-  **`bundle.h5` + `stimuli/` only — never `face_crops/`** (11 GB F4 never opens; §1.3). The script
-  rsyncs the tar to `$LOCAL_SCRATCH` and extracts it there, keeping 1804 random PNG reads off the
-  network filesystem; `STAGE_BUNDLE=0` opts out and uses `BUNDLE_DIR` as-is. `data/` is git-ignored,
-  so F2's `fixations.json` / `gt_heatmaps.h5` / `subject_id_map.json` / `bridge_report.json` still
-  have to be shipped by hand — F3's lesson, and the script's preconditions fail loudly rather than
-  mid-run.
+  **The bundle archive is staged by the script; there is nothing to prepare.** It copies
+  `$BUNDLE_TAR` (default `$HOME_DIR/projects/bundle_chunk.tar`, the archive
+  `whole_train.sh` uses) to `$LOCAL_SCRATCH` and expands it **there** — unpacking thousands of
+  small files on beegfs is the slow part, which is exactly what the copy avoids. The beegfs
+  archive is only ever read; the script removes only the scratch copy it made, under a guard
+  against the two paths being the same file. `STAGE_BUNDLE=0` opts out and uses `BUNDLE_DIR`
+  as-is. `data/` is git-ignored, so F2's `fixations.json` / `gt_heatmaps.h5` /
+  `subject_id_map.json` / `bridge_report.json` (2.7 MB in total — **not** the 306 MB
+  `stimuli/`, which FR11.4 forbids F4 from using) still have to be on the cluster; F3 already
+  shipped them, and the script's preconditions fail loudly rather than mid-run.
   - `py tools/eve_prep/check_features.py --fix PATH --heatmaps PATH --feat-dir DIR [--split both]`
     — the guard. Torch-only; it deliberately does **not** import `evedataset` or open the bundle, so
     it runs before the bundle is staged. JSON on stdout, `0` = complete / `1` = incomplete.
