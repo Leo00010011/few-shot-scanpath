@@ -6,11 +6,43 @@
 
 ---
 
-## 1. Status: code complete, tests green, **the extraction run has not happened**
+## 0. The run — 2026-09-15, `SPLIT=test`, clean first time
 
-Everything in the plan's Implementation Order is built and tested except **step 11,
-"The run"**, which needs a GPU allocation and ~11.3 GB of disk on the cluster. Every
-CPU-side validation group passes on the Windows dev machine:
+**1062 extracted, 0 skipped, every D7 counter `0`.** The post-extraction
+`check_features.py` exits `0` with `missing: []` / `bad_shape: []`, and
+`exp_key_crosscheck.agree` is `true` over all 1804 trials. `fixations_sha256`
+matches F2's `46c6926f…`; `embeddings.npy` copied at sha `a94bcf6534a2430e…`.
+
+Four things the run itself established:
+
+- **The exit-code guard works.** The pre-extraction `check_features.py` failed with
+  all 1062 missing and exit 1 — which is what triggered extraction. Reading that
+  `FATAL preflight failure` in the log as an error is a natural mistake; it is the
+  guard doing its job.
+- **`$LOCAL_SCRATCH` is scheduler-provided per job**: `bundle_dir` resolved to
+  `/mnt/scratch/leonardo.ulloa/5522439/data/bundle`. The `/tmp/$USER` fallback never
+  fired, and the staged tree is gone with the allocation — which is why
+  `validate_features.py`'s two bundle-dependent checks skip unless `--bundle-dir`
+  names a copy that still exists.
+- **The env is `scanpath`, with F1's version drift**: python 3.11.14,
+  torch 2.10.0+cu126, numpy 2.1.2, against a pin list of 3.8.18 / 1.13.1 / 1.24.3
+  ([TechStack.md](../constitution/TechStack.md) §1.1). Stage B is a forward pass
+  through a torchvision backbone, so this is far less exposed than the float metric
+  paths — but it is recorded in `versions.txt`, per D5, rather than assumed harmless.
+- **`evedataset` reported as `"unknown"`.** The package exposes no `__version__`;
+  it does publish `0.1.0` as distribution metadata. `_version_of()` now falls back to
+  `importlib.metadata`, so the D5 record stops discarding a version it could have
+  had. Fixed after the run — the stored `versions.txt` from 2026-09-15 still says
+  `unknown`.
+
+---
+
+## 1. Status: extraction done for the scored split; the checks are scripted
+
+Everything in the plan's Implementation Order is built, tested and **run** for
+`SPLIT=test`. What remains is executing `tools/eve_prep/validate_features.py` on the
+cluster and transcribing its numbers (§8). Every CPU-side validation group passes on
+the Windows dev machine:
 
 | group | what it covers | result |
 |---|---|---|
@@ -19,10 +51,11 @@ CPU-side validation group passes on the Windows dev machine:
 | 4 | preflight `check_features.py` | 9/9 |
 | 5 | task embeddings, report, atomic write | 9/9 |
 | 6 | **bundle integration, on the real bundle** | 10/10 |
-| 7 (static) | run-script invariants that are greppable | 11/11, 1 skipped |
+| 7 (static) | run-script invariants that are greppable | 12/12, 1 skipped |
 | — | upstream untouched, keying greps | 4/4 |
+| — | the post-run validator, incl. 8 deliberate corruptions | 10/10 |
 
-**78 passed, 1 skipped** (`bash -n`, see §5). Run them with:
+**89 passed, 1 skipped** (`bash -n`, see §5). Run them with:
 
 ```
 py -m pytest tests/eve_prep -q --bundle-dir <path to EveDataset/bundle>
@@ -239,18 +272,21 @@ a failed allocation to discover.
 
 ## 8. Still to do
 
-1. **The run**, under `salloc`: `bash bash/extract_eve_features.sh` (or
-   `SPLIT=test` for the 1062 scored trials at ~6.7 GB — sufficient for F5, since
-   `test.py` never builds a train-split loader).
-2. **Confirm F2's four artefacts are on the cluster** — `fixations.json`,
-   `gt_heatmaps.h5`, `subject_id_map.json`, `bridge_report.json`, 2.7 MB in total and
-   **not** the 306 MB `stimuli/` (FR11.4 forbids F4 using it). F3 already shipped
-   them; `data/` is git-ignored, so they do not arrive by `git pull`, and the run
-   script's preconditions fail loudly if they are missing. **Nothing else to
-   prepare** — the script stages the bundle archive itself.
-3. **Validation Group 7's four deliberate failure runs** (missing `bundle.h5`,
-   missing `stimuli/`, missing `gt_heatmaps.h5`, insufficient space) and the
-   `FORCE_FEATURES=1` determinism check, which need the cluster.
-4. **The Data Validity block against the real artefacts** — coverage exactly 1804
-   (or 1062), min file size ≥ 6.2 MB, and the `feature_sha256` / phantom-key
-   invariants, all of which need the extracted cache.
+1. **Run the post-run validator on the cluster** — CPU-only, login node, no GPU:
+   ```
+   python tools/eve_prep/validate_features.py        --features data/eve_features --bridge-dir data/eve_bridge        --senet-report data/eve_senet/seed0/senet_report.json
+   ```
+   It writes `data/eve_features/validation_report.json` and exits non-zero on any
+   failure. Add `--bundle-dir` only while a staged bundle still exists (inside the
+   allocation, `$LOCAL_SCRATCH/data/bundle`), otherwise its two bundle-dependent
+   checks skip — and a skip is reported as a skip, never as a pass.
+2. **Transcribe its numbers here** — the realised sparsity band and the within-/
+   cross-name cosine medians from the *real* tensors, to sit beside the pre-run CPU
+   estimates in §2 and §3. Then flip F4 to ✓ DONE.
+3. **Optional: `SPLIT=train`.** Only if F5 ever needs support-split features;
+   `test.py` builds no train-split loader. The extractor is resumable, so it would
+   fill the 742 gaps and leave the 1062 alone.
+4. **Not exercised, and honestly so:** validation Group 7's four deliberate failure
+   runs (missing `bundle.h5`, missing `stimuli/`, missing `gt_heatmaps.h5`,
+   insufficient space) and the `FORCE_FEATURES=1` determinism check. The clean run
+   exercised the happy path only.

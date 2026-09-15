@@ -568,10 +568,21 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
   - `py tools/eve_prep/extract_features.py --bundle-dir DIR --bridge-dir DIR --out-dir DIR
     [--split both|test|train] [--overwrite] [--cuda 0]`. `--allow-cpu` is required to bypass the
     CUDA check, so a silently CPU-bound run cannot be mistaken for a normal one.
-- Its tests: `py -m pytest tests/eve_prep -q` (74 tests). `bundle`-marked ones need
+- `python tools/eve_prep/validate_features.py --features DIR --bridge-dir DIR
+  [--bundle-dir DIR] [--senet-report PATH] [--no-sha]` — the **post-run** Data Validity and
+  Data Architecture Integrity block, CPU-only and GPU-free so it runs on a login node or on
+  Windows. Every check is wrapped, so it runs to completion on a broken cache; it writes
+  `validation_report.json` beside the features and its **exit code** is load bearing. Checks
+  needing the bundle **skip** unless `--bundle-dir` is given — the staged copy lives on
+  node-local scratch and is gone once the allocation ends — and a skip is reported as a skip,
+  never as a pass. It re-hashes every tensor against `feature_report.json`'s `feature_sha256`
+  (`--no-sha` opts out), which is the FR8.2 handshake F5 relies on.
+- Its tests: `py -m pytest tests/eve_prep -q` (89 tests). `bundle`-marked ones need
   `--bundle-dir <EveDataset/bundle>`; `bridge`-marked ones need `data/eve_bridge/`. Both **skip**
   when absent. The FR4.4 bit-identity test is unmarked and runs everywhere — it is the assertion
-  that licenses the transcribed preprocessing chain (§3.9).
+  that licenses the transcribed preprocessing chain (§3.9). Ten of them corrupt a synthetic cache
+  in one specific way each and assert `validate_features.py` catches it: a checker that cannot
+  fail is not a check.
 
   > **Run each test directory in its own invocation.** `tests/eve_bridge`, `tests/osie_prep` and
   > `tests/eve_senet` each carry a `conftest.py` that its own modules import by bare name
@@ -634,7 +645,8 @@ few-shot-scanpath/
 │   ├── __init__.py                 #   EvePrepError + the (768,2048)/(768,1024)/(1080,1920,3) shapes
 │   ├── trial_keys.py               #   (name, subject) -> exp_key; NO torch, reused by F5
 │   ├── extract_features.py         #   THE only torch importer; per-trial features + the report
-│   └── check_features.py           #   preflight; exit code drives the guard. No evedataset import
+│   ├── check_features.py           #   preflight; exit code drives the guard. No evedataset import
+│   └── validate_features.py        #   POST-run Data Validity block; CPU; exit code load bearing
 │
 ├── tools/eve_senet/                # ◀ Stage C — OUR code. CPU dev / GPU run. Added 2026-09-10 (F3)
 │   ├── __init__.py                 #   EveSenetError

@@ -611,10 +611,26 @@ around. 1804 tensors ≈ **11.3 GB** (`test` alone: 1062 ≈ 6.7 GB, sufficient 
       file. *(An intermediate version of this bullet proposed a narrowed `bundle.h5` + `stimuli/`
       tar. That optimised the wrong axis and was dropped 2026-09-15 — see the spec's `notes.md`
       §4a.2.)*
-- [ ] **The extraction run itself**, under `salloc` — `SPLIT=test bash bash/extract_eve_features.sh`.
-      Nothing to prepare but F2's four artefacts (2.7 MB; F3 already shipped them), since `data/` is
-      git-ignored and nothing under it arrives by `git pull`. The script stages the bundle archive
-      itself and its preconditions fail loudly if anything is missing.
+- [x] **THE RUN HAPPENED — 2026-09-15, `SPLIT=test`, clean on the first attempt.**
+      **1062 extracted, 0 skipped, every D7 counter `0`**, `cuda_available: true`, and the
+      post-extraction `check_features.py` exits `0` with `missing: []` / `bad_shape: []`.
+      `exp_key_crosscheck.agree: true` over all **1804** trials (the cross-check spans the whole
+      mapping, not just the scored split). `fixations_sha256 = 46c6926f…` matches F2's.
+      Artefacts in the git-ignored `data/eve_features/`: 1062 `.pth` (~6.7 GB), `embeddings.npy`
+      (sha `a94bcf6534a2430e…`), `feature_report.json`, `versions.txt`, `stdout.txt`.
+      **The guard behaved exactly as designed**: the pre-extraction `check_features.py` failed with
+      all 1062 missing (exit 1), which is what triggered extraction.
+      Staging worked — `bundle_dir` resolved to `/mnt/scratch/leonardo.ulloa/5522439/data/bundle`,
+      so `$LOCAL_SCRATCH` is scheduler-provided per job and the `/tmp/$USER` fallback never fired.
+      Resolved stack: python 3.11.14, torch 2.10.0+cu126, numpy 2.1.2 — the `scanpath` env, the
+      same drift F1 ran on ([TechStack.md](TechStack.md) §1.1).
+- [ ] **`SPLIT=train`**, only if F5 ever needs support-split features. `test.py` builds no
+      train-split loader (§3.6), so this is optional; the extractor is resumable, so it would only
+      fill the 742 gaps.
+- [ ] Run `tools/eve_prep/validate_features.py` on the cluster and paste its
+      `validation_report.json` numbers into the spec's `notes.md` §8, then flip this feature to
+      ✓ DONE. Validation Group 7's four deliberate failure runs and the `FORCE_FEATURES=1`
+      determinism check remain unexercised.
 - [ ] Validation Group 7's four deliberate failure runs, the `FORCE_FEATURES=1` determinism check,
       and the Data Validity block against the extracted cache.
 

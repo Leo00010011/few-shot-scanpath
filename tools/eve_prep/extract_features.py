@@ -270,11 +270,25 @@ def copy_task_embeddings(src, dst):
 # ----------------------------------------------------------------------
 
 def _version_of(module_name, attr="__version__"):
+    """The module's version, importing it first so a broken install still reports.
+
+    Falls back to distribution metadata when the module exposes no ``__version__``:
+    ``evedataset`` is exactly that case, and reporting it as "unknown" wastes a D5
+    record that was available all along (observed on F4's first real run).
+    """
     try:
         module = __import__(module_name)
-        return str(getattr(module, attr, "unknown"))
     except Exception as exc:
         return "MISSING ({!r})".format(exc)
+    version = getattr(module, attr, None)
+    if version:
+        return str(version)
+    try:
+        import importlib.metadata as importlib_metadata
+
+        return str(importlib_metadata.version(module_name))
+    except Exception:
+        return "unknown"
 
 
 def versions(device=None):
