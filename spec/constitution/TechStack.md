@@ -506,6 +506,25 @@ Two extra install steps for `senet` only, both of which need a working `nvcc` an
   `SENET_ENV=/mnt/beegfs/home/leonardo.ulloa/envs/senet`. Same `bash`-never-`source` rule as F1, for
   the same `-euo pipefail` reason. The run is gated on `check_env.py`'s exit code, and the two
   outstanding kernel-launch checks in §1.3 should be run once at the top of the first allocation.
+- The EVE evaluation run (F5 / Stage D + E), from the repo root on the cluster. **No `module load
+  CUDA` and no `senet`** — F3's embedding is consumed as a file:
+  ```
+  salloc --gres=gpu:1 --cpus-per-task=4 --mem=32G --time=08:00:00
+  bash bash/test_eve.sh                 # SEED=0
+  SEED=1 bash bash/test_eve.sh
+  SEED=2 bash bash/test_eve.sh
+  ```
+  Same `bash`-never-`source` rule as F1 and F3. The run is gated on
+  `tools/eve_eval/check_eval.py`'s exit code; `FAST_PREFLIGHT=1` skips only the 1062-tensor hash
+  sweep (existence is still checked, and `preflight.json` records the omission). Features are staged
+  to `$LOCAL_SCRATCH` by default (`STAGE_FEATURES=0` reads them from beegfs); everything written
+  still goes to beegfs.
+- Its CPU preflight, runnable from the repo root on Windows or a login node:
+  `py tools/eve_eval/check_eval.py --bridge-dir DIR --senet-dir DIR --feature-dir DIR
+  --weights-dir DIR [--fast] [--out preflight.json]` — exit 0 = every check passed, 1 = at least one
+  failed and **all** of them are printed. `preflight.json` is written either way.
+- Its tests: `py -m pytest tests/eve_eval -q` (104 tests, CPU, Windows). The `bridge`-marked ones
+  read the real `data/eve_bridge/` and skip when it is absent.
 - **Compile on the login node, never under `salloc`.** The cluster has a fair-use policy and holding a
   GPU to run a compiler violates it in spirit. Both CUDA extensions build GPU-free with
   `FORCE_CUDA=1` + `TORCH_CUDA_ARCH_LIST` (§1.3) — that is what those flags are for.
@@ -1161,6 +1180,100 @@ over 20 multi-viewer stimuli a range of **0.457–0.968, median 0.721**, against
 median of **0.382**. Validation predicted a flat `≥ 0.7` floor; that shape was wrong, since the
 similarity is a *function of the scale difference*. Sparsity (fraction of exact zeros) runs
 **0.752–0.858**, above the predicted 0.3–0.8 band and far below the 0.95 investigate threshold.
+
+### 3.10 The EVE eval branch and its run record (Stage D+E, added 2026-09-15)
+
+`ISP/EVE/GazeformerISP/` is F5's branch: a **full verbatim copy** of `ISP/OSIE/GazeformerISP/src/`
+with edits confined to **two files**, `dataset/dataset.py` and `test.py`. A test asserts that
+differing set is exactly those two and that the three frozen files are byte-identical to OSIE's
+(D1) — the check §4.2's COCO_FV drift went without. `src/data/` is copied but never read (the run
+points `--fix_dir` / `--emb_dir` at `data/eve_*`); `.gitignore`'s `data/` rule matches at any depth,
+so those two copies are untracked, exactly as OSIE's would be today.
+
+| module | role |
+|---|---|
+| `ISP/EVE/.../dataset/dataset.py::EVE_evaluation` | per-trial feature load, the D4 identity assertion, two additive sample keys |
+| `ISP/EVE/.../test.py` | explicit `origin_size`, `--max_batches`, D4 subject recovery, the heatmap block, `metrics.json` |
+| `tools/eve_eval/check_eval.py` | the CPU preflight (FR3.1–FR3.10); **exit code gates the run** |
+| `tools/eve_eval/parity.py` | re-runs F2's heatmap bitwise-parity check under the run's own numpy |
+| `bash/test_eve.sh` | the single documented command, seed-swept over `0 1 2` |
+
+**`EVE_evaluation` differs from `OSIE_evaluation` in four ways and nothing else.**
+
+1. **`origin_size=(1080, 1920)` is passed explicitly** by `test.py`. OSIE's `test.py` does not pass
+   it and relies on the `(600, 800)` default while parsing `--origin_width`/`--origin_height` into
+   unused variables; on EVE that mis-scales every coordinate by 2.4× / 1.8× and every metric still
+   returns a number. The realised scales are the non-uniform `3.75 / 2.8125` (OPEN-4), asserted with
+   `==` at construction.
+2. **The `torch.load` moved INSIDE the subject loop**, keyed by `exp_key` and built by
+   concatenation through `exp_key_filename()` — never `str.replace('jpg','pth')` (§3.2), which an
+   AST test forbids in `__getitem__`. Upstream filled the three per-subject slots with three
+   references to one tensor; each now gets its own participant's capture (OPEN-6 at Stage D). The
+   evaluator sees no difference: `imgid_to_sub`, `__len__` over images, the uniform three-per-image
+   count, the positional diagonal and the retrieval block are untouched.
+3. **The D4 identity assertion.** Each record is stamped with its subject id *before*
+   `select_fewshot_subject()` (which mutates in place and returns a filtered list of the same dicts)
+   and compared after; any change raises, naming the first offender. Only an ascending
+   `0 1 … 37` gives the identity remap, and the tag survives filtering on purpose — a
+   `--fewshot_subject` that does not cover the cohort is a *coverage* failure the preflight's
+   uniform-count check owns, not an identity one.
+4. **Two additive sample keys**, `trial_key` (`"{name}|{subject}"`) and `length`
+   (`min(length, 16)`), collated into `trial_keys` (a `(B, 3)` list of str, untouched by the
+   ndarray→tensor conversion) and `lengths` (a `(B, 3)` int32 tensor). They address the heatmap
+   store and nothing else.
+
+`stimuli_dir` is accepted for signature parity and **never read**: the bridge's
+`data/eve_bridge/stimuli/` export is one `.jpg` per `stimulus_name` and cannot represent what every
+participant saw (OPEN-6). It is unused downstream, full stop.
+
+**`test.py`'s four EVE-only behaviours.**
+
+- **`--max_batches` replaces `if i_batch > 100: break` (default `-1` = no cap).** That cap is inert
+  for OSIE (70 batches) and **live** for EVE (354): it would stop at 101 images, 29 % of the split,
+  and report a plausible wrong number. Parameterised rather than deleted so the resolved value lands
+  in the logged arg namespace (D5), and backed by a post-loop assertion that the batch count equals
+  `len(test_loader)`.
+- **The prediction record's subject id comes from the BATCH.** `get_prediction_list()` writes
+  `args.fewshot_subject[subject_idx]`, correct for OSIE only by accident (5 entries, `subject_num`
+  5). Here `fewshot_subject` has 38 entries and `subject_num` is 3, so it would stamp participant
+  0/1/2 onto all 354 images while the real trio varies. The metrics would be unharmed — the diagonal
+  is positional — but the artefact would be a lie. `batch["subjects"]` carries the right dense ids in
+  the right positional order; `subject_id_map.json`'s `to_eve` maps them, and both go into the
+  record. `data_postprocess.py` stays a byte-identical copy and is simply not used on this path.
+- **`--eval_repeat_num` is rejected at parse time unless it is 1** (§5).
+- **The NSS/CC/KLD block** is accumulated **weighted by each batch's valid-timestep count**, so the
+  reported value is the mean over all valid timesteps rather than a mean of batch means, and is
+  reported separately with its denominator stated (§4.1, D6).
+
+**`prediction.json`** is upstream's schema plus one additive key:
+`{"name", "subject" (dense), "subject_eve", "X", "Y", "T" (ms int)}`. `subject_eve` is what makes
+the artefact answer D4's question without a second file. The key set is asserted equal to the scored
+split's before it is written.
+
+**`metrics.json`** (new, one per seed, written **unconditionally** — including on a run that
+produced no predictions) carries: `seed`, the full resolved `args`, `versions` (+ `cuda`,
+`gpu_name`), `sha256` of `{fixations, user_embedding, checkpoint, embeddings_npy}` **and of the three
+frozen files as they were on the machine that produced the numbers**, `counts`, `headline`
+`{SM, MM, SED}`, `metrics` (the evaluator's `cur_metrics` verbatim), `per_cell_std: null` with its
+deferral reason, the `heatmap` block or `null` with a reason, `multimatch_nan_drops`, the bridge's
+D7 counters, the `preflight` fingerprint, and `notes` — the FR13.1–FR13.6 annotations as strings.
+It is a **record**, not a re-score: it recomputes nothing (F6 is the re-scorer).
+
+**`per_cell_std` is `null`, and that is deliberate.** `cur_metrics_std` is deferred to F6, which
+recomputes it from `prediction.json` on CPU. The field is present-and-null rather than omitted so a
+reader cannot mistake absence for zero. The spread F5 supplies is the **across-seed** one over seeds
+0/1/2, which is a different quantity (§3.5b) — spread over *runs* (n = 3, so quote the range too),
+not over *(image, subject) cells* within one run.
+
+**One observation from the real artefacts** *(measured 2026-09-15, before the run)*: over the scored
+split the gaze saturates the vertical axis exactly (max Y = 1080 → 384.0) but **not** the horizontal
+one — max X is **1720.8 px → 458.9** in metric space, 89.6 % of the width. Validation predicted
+near-saturation on both. Nothing is mis-scaled; the recorded horizontal extent is simply smaller
+than the display, and F7 should say so rather than describe the stimuli as fully swept. The scored
+split's `Σ min(length, 16)` is **6214** — the heatmap block's denominator, against 1062 cells for the
+scanpath metrics, which is the whole reason the two are reported separately.
+
+---
 
 ---
 

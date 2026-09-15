@@ -65,9 +65,14 @@ def _code_only(path):
 
 def test_upstream_is_unmodified():
     """D1, convention 2 -- ResNetCOCO is imported, never edited."""
+    # ISP/EVE/ is excluded rather than ISP/ narrowed: F5 ADDS that branch (a new
+    # dataset branch mirroring OSIE, working convention 3), and F4's claim is that the
+    # branches it consumes are unedited. Every existing branch and the whole of
+    # SE-Net stay in scope, so an edit to ResNetCOCO or to any frozen file still fails
+    # here.
     try:
         out = subprocess.check_output(
-            ["git", "status", "--porcelain", "ISP", "SE-Net"],
+            ["git", "status", "--porcelain", "ISP", "SE-Net", ":!ISP/EVE"],
             cwd=REPO_ROOT, stderr=subprocess.STDOUT).decode()
     except (OSError, subprocess.CalledProcessError) as exc:
         pytest.skip("git unavailable: {!r}".format(exc))
