@@ -1270,6 +1270,23 @@ reader cannot mistake absence for zero. The spread F5 supplies is the **across-s
 0/1/2, which is a different quantity (§3.5b) — spread over *runs* (n = 3, so quote the range too),
 not over *(image, subject) cells* within one run.
 
+**As it ran** *(2026-09-15, `hpc-gpu1`, Tesla V100S-PCIE-32GB)*. Three seeds, ~20 s of inference
+each after a 27 s rsync of the 6.7 GB feature cache to `$LOCAL_SCRATCH` (236 MB/s). Resolved stack,
+identical across all three `versions.txt`: python 3.11.14, torch 2.10.0+cu126, torchvision
+0.25.0+cu126, numpy 2.1.2, scipy 1.14.1, skimage 0.26.0, cv2 4.11.0, h5py 3.12.1, pandas 2.2.3,
+CUDA 12.6 — and **multimatch-gaze 0.1.3**, the one pin that is enforced rather than merely recorded.
+That is the same `scanpath` env F1 used (§1.1), so the two runs are on one stack. **The FR3.10
+heatmap parity check passed bitwise in that env**, which discharges §1's dev-machine caveat about
+trusting `gt_heatmaps.h5` on the cluster — there is no numpy 1.23.5 anywhere in play, and the run's
+own numpy is the one that was checked. Artefacts: `result/EVE-eval/log/seed{0,1,2}/`, six files
+each; **`metrics.json` and `prediction.json` are git-ignored** by the blanket `*.json` rule, so they
+exist only on beegfs and in the copy pulled back to `eve_eval_seeds/`.
+
+**The heatmap block carries no seed variance.** NSS/CC/KLD score `all_actions_prob`, which is
+deterministic given the model and the input; only `Sampling.random_sample()` is stochastic and it
+reaches the scanpath metrics alone. All three seeds returned **bitwise-identical** NSS 1.0729 /
+CC 0.1384 / KLD 7.8953. Three identical numbers look like a stale cache and are not one.
+
 **One observation from the real artefacts** *(measured 2026-09-15, before the run)*: over the scored
 split the gaze saturates the vertical axis exactly (max Y = 1080 → 384.0) but **not** the horizontal
 one — max X is **1720.8 px → 458.9** in metric space, 89.6 % of the width. Validation predicted

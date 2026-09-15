@@ -185,9 +185,13 @@ of **38 participants — 354 scored stimuli (1062 cells at 3 subjects per image)
 trial, so the 925 `stimulus_image_conflict`s have nothing left to contend over and the bridge's
 per-name `stimuli/*.jpg` export is simply unused downstream.
 
-**Stages A, B and C are all complete as of 2026-09-15, and F5 is unblocked**: every input Stage D
-needs now exists as an artefact on the cluster. See [Roadmap.md](Roadmap.md) **§0** for the artefact
-table, the environment map, and the traps F5 inherits.
+**Every stage has now run.** Stages A, B and C completed on 2026-09-15, and **Stage D+E ran the
+same day** (F5): `ISP/EVE/GazeformerISP/` over the full 354-image scored split at seeds 0, 1 and 2,
+1062/1062 cells, with the authors' unmodified `comprehensive_evaluation_by_subject()`. The mission's
+"definition of done" (§5) is therefore satisfied on its mechanical half — one documented command
+produced the log, the metrics and a re-scorable `prediction.json`. **The written statement of what
+the numbers do and do not license is still outstanding, and is F7.** See [Roadmap.md](Roadmap.md)
+**§0** for the artefact table and F5's closing record.
 
 ---
 

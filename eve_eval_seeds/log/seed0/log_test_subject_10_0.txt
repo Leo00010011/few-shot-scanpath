@@ -1,0 +1,75 @@
+[09/15/2026 04:23:07 PM - root - INFO] The args corresponding to testing process are: 
+[09/15/2026 04:23:07 PM - root - INFO] mode                : test
+[09/15/2026 04:23:07 PM - root - INFO] img_dir             : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_bridge/stimuli
+[09/15/2026 04:23:07 PM - root - INFO] feat_dir            : /mnt/scratch/leonardo.ulloa/5522463/eve_features/image_features
+[09/15/2026 04:23:07 PM - root - INFO] emb_dir             : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_features/embeddings.npy
+[09/15/2026 04:23:07 PM - root - INFO] width               : 512
+[09/15/2026 04:23:07 PM - root - INFO] height              : 384
+[09/15/2026 04:23:07 PM - root - INFO] origin_width        : 1920
+[09/15/2026 04:23:07 PM - root - INFO] origin_height       : 1080
+[09/15/2026 04:23:07 PM - root - INFO] im_h                : 24
+[09/15/2026 04:23:07 PM - root - INFO] im_w                : 32
+[09/15/2026 04:23:07 PM - root - INFO] batch               : 1
+[09/15/2026 04:23:07 PM - root - INFO] seed                : 0
+[09/15/2026 04:23:07 PM - root - INFO] gpu_ids             : [0]
+[09/15/2026 04:23:07 PM - root - INFO] lambda_1            : 1.0
+[09/15/2026 04:23:07 PM - root - INFO] eval_repeat_num     : 1
+[09/15/2026 04:23:07 PM - root - INFO] min_length          : 1
+[09/15/2026 04:23:07 PM - root - INFO] max_length          : 16
+[09/15/2026 04:23:07 PM - root - INFO] patch_size          : 16
+[09/15/2026 04:23:07 PM - root - INFO] num_encoder         : 6
+[09/15/2026 04:23:07 PM - root - INFO] num_decoder         : 6
+[09/15/2026 04:23:07 PM - root - INFO] hidden_dim          : 512
+[09/15/2026 04:23:07 PM - root - INFO] nhead               : 8
+[09/15/2026 04:23:07 PM - root - INFO] img_hidden_dim      : 2048
+[09/15/2026 04:23:07 PM - root - INFO] lm_hidden_dim       : 768
+[09/15/2026 04:23:07 PM - root - INFO] encoder_dropout     : 0.1
+[09/15/2026 04:23:07 PM - root - INFO] decoder_dropout     : 0.2
+[09/15/2026 04:23:07 PM - root - INFO] cls_dropout         : 0.4
+[09/15/2026 04:23:07 PM - root - INFO] cuda                : 0
+[09/15/2026 04:23:07 PM - root - INFO] subject_feature_dim : 384
+[09/15/2026 04:23:07 PM - root - INFO] action_map_num      : 4
+[09/15/2026 04:23:07 PM - root - INFO] fix_dir             : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_bridge/fixations.json
+[09/15/2026 04:23:07 PM - root - INFO] evaluation_dir      : src/assets/EVE-eval
+[09/15/2026 04:23:07 PM - root - INFO] user_emb_path       : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_senet/seed0/eve_fewshot_user_embedding_10_seed0.pt
+[09/15/2026 04:23:07 PM - root - INFO] ex_subject          : [-1]
+[09/15/2026 04:23:07 PM - root - INFO] fewshot_subject     : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37]
+[09/15/2026 04:23:07 PM - root - INFO] num_fewshot         : 10
+[09/15/2026 04:23:07 PM - root - INFO] fewshot_finetune_path: 
+[09/15/2026 04:23:07 PM - root - INFO] subject_num         : 3
+[09/15/2026 04:23:07 PM - root - INFO] random_support      : 0
+[09/15/2026 04:23:07 PM - root - INFO] max_batches         : -1
+[09/15/2026 04:23:07 PM - root - INFO] heatmap_dir         : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_bridge/gt_heatmaps.h5
+[09/15/2026 04:23:07 PM - root - INFO] subject_map_path    : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_bridge/subject_id_map.json
+[09/15/2026 04:23:07 PM - root - INFO] bridge_report       : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_bridge/bridge_report.json
+[09/15/2026 04:23:07 PM - root - INFO] senet_report        : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_senet/seed0/senet_report.json
+[09/15/2026 04:23:07 PM - root - INFO] feature_report      : /mnt/beegfs/home/leonardo.ulloa/projects/few-shot-scanpath/data/eve_features/feature_report.json
+[09/15/2026 04:23:07 PM - root - INFO] metrics_json        : metrics.json
+[09/15/2026 04:23:07 PM - h5py._conv - DEBUG] Creating converter from 3 to 5
+[09/15/2026 04:23:09 PM - root - INFO] preflight OK: {"n_cells": 1062, "n_images": 354, "n_subjects": 38, "n_records_total": 1804, "n_features_expected": 1062, "n_features_hashed": 0}
+[09/15/2026 04:23:27 PM - root - INFO] The metrics for best model performance are: 
+[09/15/2026 04:23:27 PM - root - INFO] MultiMatch-vector         : 0.9519
+[09/15/2026 04:23:27 PM - root - INFO] MultiMatch-direction      : 0.6185
+[09/15/2026 04:23:27 PM - root - INFO] MultiMatch-length         : 0.9382
+[09/15/2026 04:23:27 PM - root - INFO] MultiMatch-position       : 0.8837
+[09/15/2026 04:23:27 PM - root - INFO] MultiMatch-duration       : 0.7193
+[09/15/2026 04:23:27 PM - root - INFO] ScanMatch -w/o duration   : 0.3573
+[09/15/2026 04:23:27 PM - root - INFO] ScanMatch -with duration  : 0.3444
+[09/15/2026 04:23:27 PM - root - INFO] VAME      -SED            : 5.8484
+[09/15/2026 04:23:27 PM - root - INFO] VAME      -STDE           : 0.8784
+[09/15/2026 04:23:27 PM - root - INFO] VAME      -SED_best       : 5.8484
+[09/15/2026 04:23:27 PM - root - INFO] VAME      -STDE_best      : 0.8784
+[09/15/2026 04:23:27 PM - root - INFO] retrieval scanmatch w/ duration-pmrr           : 0.6274
+[09/15/2026 04:23:27 PM - root - INFO] retrieval scanmatch w/ duration-pr1            : 36.0640
+[09/15/2026 04:23:27 PM - root - INFO] retrieval scanmatch w/ duration-pr3            : 100.0000
+[09/15/2026 04:23:27 PM - root - INFO] retrieval scanmatch w/ duration-pr5            : 100.0000
+[09/15/2026 04:23:27 PM - root - INFO] retrieval scanmatch w/ duration-rsum           : 236.0640
+[09/15/2026 04:23:28 PM - root - INFO] FR13.1 -- retrieval is reported SEPARATELY from the paper-comparable block. At subject_num = 3 every rank lies in {0..2}, so R@3 is STRUCTURALLY SATURATED at 100% and R@5 doubly so. Quote R@1 and MRR. This branch's p2g() computes r3 as `rank < 3`, so the field really is R@3 here -- the `rank < 2` defect is COCO_FV's (TechStack section 4.2).
+[09/15/2026 04:23:28 PM - root - INFO] FR13.2 -- 38 participants over 354 scored stimuli, 1062 cells, 3 subjects per image WITH IDENTITIES VARYING BY IMAGE. The evaluator's diagonal is positional, so this is legitimate -- but a reader will assume a fixed trio unless told (Mission P4, OPEN-5).
+[09/15/2026 04:23:28 PM - root - INFO] FR13.3 -- three independent distortions apply and all three reach F7: the metric squash 1920x1080 -> 512x384 (3.75 / 2.8125, OPEN-4); F4's feature squash 1920x1080 -> 1024x768 (0.5333 / 0.7111); F3's SE-Net input squash to 512x320 (0.2667 / 0.2963). None is uniform.
+[09/15/2026 04:23:29 PM - root - INFO] FR13.4 -- carried from bridge_report.json: short_scanpath (padded to length 3 INSIDE the frozen evaluator, and the padded array then replaces the original for all subsequent metrics in that cell), clamped_coords, incomplete_stimulus, surplus_trial (images seen by 4 participants contribute only 3).
+[09/15/2026 04:23:29 PM - root - INFO] FR13.5 -- both the ISP checkpoint and the SE-Net checkpoint that produced our embeddings were trained on OSIE. What transfers is the representation, not the subjects (OPEN-2). And OPEN-7: our own OSIE reproduction lands ~1% on the WORSE side of the published row on all three headline metrics, so any comparison of these numbers to the paper inherits that offset.
+[09/15/2026 04:23:29 PM - root - INFO] FR13.6 -- 0 of 1062 diagonal MultiMatch cells were dropped as NaN before the mean (is_eliminating_nan=True), which changes the MultiMatch denominator. SED/STDE are not filtered.
+[09/15/2026 04:23:29 PM - root - INFO] FR9.3 -- SED_best and STDE_best are ALIASES of SED and STDE, not a best-of-N: evaluation.py assigns them outright with no selection step, in every configuration and at any eval_repeat_num. Report SED and STDE once each; listing the _best pair alongside them reads as corroboration that does not exist (TechStack section 4).
+[09/15/2026 04:23:29 PM - root - INFO] NSS/CC/KLD average over valid timesteps (M = 6214), not over (image, subject) cells (1062) like the scanpath metrics. Reported separately; never enters the paper-comparable row and never influences SM or MM (D6, FR8.5).
+[09/15/2026 04:23:29 PM - root - INFO] heatmap NSS 1.0729 CC 0.1384 KLD 7.8953 over M = 6214 timesteps

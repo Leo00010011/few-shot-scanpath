@@ -7,8 +7,8 @@
 
 ## 0. Start here — state of the project, 2026-09-15
 
-**F0–F4 are closed. F5 is CODE COMPLETE (2026-09-15) and waits only on the cluster run.**
-**No open decision blocks any feature.**
+**F0–F5 are closed. F6 is next. No open decision blocks any feature.**
+F5 ran on 2026-09-15 at three seeds: **SM 0.3499 ± 0.0014 · MM 0.8234 ± 0.0012 · SED 5.8368 ± 0.0118**, 1062/1062 cells, 354/354 batches. The numbers exist; **reading them is F7's job and has not been done.**
 Every input Stage D needs now exists on the cluster as an artefact:
 
 | input | artefact | contract |
@@ -140,8 +140,8 @@ would have stamped participant 0/1/2 onto all 354 images. See [TechStack.md](Tec
 | F2 | Dataset bridge: EVE → `fixations.json` + GT heatmaps | ✓ **DONE** (2026-09-10) — 38 subjects, 1062 scored cells | — |
 | F3 | Subject embeddings for our subjects | ✓ **DONE** (2026-09-14) — ran at seeds 0 and 1, duration channel pinned, 0 missing / 0 unexpected keys | — |
 | F4 | Per-trial image features for our stimuli | ✓ **DONE** (2026-09-15) — 1062 tensors extracted and validated, **OPEN-6 resolved** | — |
-| F5 | Our-dataset eval branch + run script | ◐ **CODE COMPLETE** (2026-09-15) — 104 CPU tests green; awaiting the cluster run | cluster allocation |
-| F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — the only unblocked feature; F1 produced its fixture | — |
+| F5 | Our-dataset eval branch + run script | ✓ **DONE** (2026-09-15) — ran at seeds 0/1/2, full 354-batch split, artefacts preserved | — |
+| F6 | Offline re-scorer (`prediction.json` → metrics) | ▶ **NEXT** — F1 produced its fixture and F5 now produced three more | — |
 | F7 | Results write-up + validity statement | ⏸ TODO | F5, F6 |
 
 Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸ TODO · ✗ DROPPED
@@ -169,7 +169,7 @@ Legend: ✓ DONE · ◐ CODE COMPLETE but blocked · ▶ IN PROGRESS/NEXT · ⏸
       │               │                │
 OPEN-6 ✓ resolved ────┤                │
               ▼                        │
-        F5 eval branch ◐ ──────────────┤
+        F5 eval branch ✓ ──────────────┤
               │                        │
               └────────────┬───────────┘
                            ▼
@@ -712,44 +712,77 @@ quote**. Sparsity also ran above its stated band (0.752–0.858 vs "roughly 0.3�
 
 ---
 
-### F5 — EVE eval branch + run script ◐ CODE COMPLETE (2026-09-15)
+### F5 — EVE eval branch + run script ✓ DONE (2026-09-15)
 
 Spec: [`spec/2026-09-15-eve-eval-branch/`](../2026-09-15-eve-eval-branch/)
 (requirements · plan · validation).
 
-> **CODE COMPLETE 2026-09-15 — everything below is built and tested on Windows CPU; nothing has
-> run on the cluster yet.** `ISP/EVE/GazeformerISP/` (a verbatim copy of the OSIE branch with
-> exactly two files changed, asserted by test), `tools/eve_eval/` (the preflight and the numpy
-> parity re-run), `bash/test_eve.sh`, and `tests/eve_eval/` — **104 tests pass, 1 skips**
-> (`bash -n`, where this shell cannot read a Windows path). `shellcheck` is **not installed on the
-> dev machine**, so validation Group 8's shellcheck item is the one static check still outstanding;
-> `bash -n` passes.
+> **F5 CLOSED 2026-09-15 — it ran, at three seeds, over the full split.**
+> 104 CPU tests green on the dev machine, then `bash/test_eve.sh` on `hpc-gpu1` (V100S). All four
+> gates passed on every seed: **`n_batches_run` 354/354** with `max_batches -1` (the `i_batch > 100`
+> cap would have reported 29 % of the split), **`fewshot_subject` `[0…37]` ascending**,
+> **1062 predictions** with the `(name, subject)` key set equal to the scored split's, and
+> **`heatmap.M` = 6214**, which matches `Σ min(length, 16)` recomputed independently from
+> `fixations.json`. **0 of 1062** diagonal MultiMatch cells were dropped as NaN, so the MultiMatch
+> denominator is the whole cohort. The three `versions.txt` and the three `preflight.json` are
+> identical.
 >
-> **What is NOT done: steps 9 and 10 of the plan.** `data/` must be shipped to the cluster by hand
-> (it is git-ignored), the preflight run alone, then seeds 0, 1 and 2 — and then validation's **Data
-> Validity** and **Data Architecture Integrity** blocks against the real artefacts. F5 is not
-> closable until those numbers exist.
+> | | seed 0 | seed 1 | seed 2 | mean | std (n=3) | range |
+> |---|---|---|---|---|---|---|
+> | SM | 0.3508 | 0.3507 | 0.3483 | **0.3499** | 0.0014 | 0.0024 |
+> | MM | 0.8223 | 0.8232 | 0.8247 | **0.8234** | 0.0012 | 0.0024 |
+> | SED | 5.8484 | 5.8371 | 5.8249 | **5.8368** | 0.0118 | 0.0235 |
+> | STDE | 0.8784 | 0.8787 | 0.8785 | **0.8785** | 0.0001 | 0.0003 |
+> | MRR | 0.6274 | 0.6266 | 0.6188 | **0.6243** | 0.0048 | 0.0086 |
+> | R@1 % | 36.06 | 35.78 | 35.03 | **35.62** | 0.5354 | 1.0358 |
 >
-> **Three things the build turned up, all recorded rather than smoothed over:**
-> 1. **A fifth silent-corruption trap the roadmap had not flagged**, now fixed and tested:
->    `get_prediction_list()` writes `args.fewshot_subject[subject_idx]`, which is correct for OSIE
->    only by accident. On EVE it would have stamped participant 0/1/2 onto every one of the 354
->    images while the real trio varies. The metrics would have been unharmed (the diagonal is
->    positional) and `prediction.json` would have been a lie. The id now comes from
->    `batch["subjects"]` and carries `subject_eve` alongside it.
+> ScanMatch w/o duration **0.3567**, with duration **0.3434**. MultiMatch by dimension: vector
+> 0.9524, direction 0.6208, length 0.9399, position 0.8844, duration 0.7195. Heatmap block
+> **NSS 1.0729 · CC 0.1384 · KLD 7.8953** over M = 6214 timesteps. The across-seed band is
+> comparable in width to F1's (SM ± 0.0041), which is what validation asked for. **This std is the
+> ACROSS-SEED one; the per-cell `cur_metrics_std` is still F6's.**
+>
+> **The heatmap block is bitwise identical across all three seeds, and that is correct, not a stale
+> cache.** NSS/CC/KLD score `all_actions_prob`, which is deterministic given the model and the
+> input; only `Sampling.random_sample()` is stochastic, and it affects the scanpath metrics alone.
+> The block therefore carries **no seed variance by construction** — worth saying, because three
+> identical numbers otherwise read as a copy-paste error.
+>
+> **What F5 did NOT do: read the numbers.** The comparison to the paper, to F1's OSIE row, and the
+> validity statement are **F7's**, and the Data Validity / Data Architecture Integrity blocks in the
+> spec's `validation.md` have **not** been run against these artefacts yet. Two confounds are
+> recorded on F7's checklist below so the reading starts from them rather than rediscovering them.
+>
+> **Where the artefacts are.** On the cluster:
+> `ISP/EVE/GazeformerISP/result/EVE-eval/log/seed{0,1,2}/`, six files each. Pulled back to the dev
+> machine at **`eve_eval_seeds/log/seed{0,1,2}/`**. **`metrics.json` and `prediction.json` are
+> git-ignored** by `.gitignore`'s blanket `*.json` rule and nothing under `result/` is tracked, so
+> they live in those two places and nowhere else — the same swallowing that hit F1's
+> `paper_reference.json` and F3's `eve_useremb.json`. **Whether to negate the rule for
+> `result/**` is an open policy question, deliberately not decided here.**
+>
+> **Two things the build turned up before the run, both fixed and tested:**
+> 1. **A fifth silent-corruption trap the roadmap had not flagged.**
+>    `get_prediction_list()` writes `args.fewshot_subject[subject_idx]`, correct for OSIE only by
+>    accident. On EVE it would have stamped participant 0/1/2 onto every one of the 354 images while
+>    the real trio varies; the metrics would have been unharmed (the diagonal is positional) and
+>    `prediction.json` would have been a lie. The id now comes from `batch["subjects"]` and carries
+>    `subject_eve` beside it.
 > 2. **The scored split does NOT saturate the horizontal axis.** Validation predicted
->    near-saturation on both axes ("EVE is full-screen"). Measured on the real `fixations.json`:
->    max Y = 1080 → **384.0 exactly**, but max X = **1720.8 px → 458.9**, 89.6 % of the metric
->    width. Nothing is mis-scaled; the recorded gaze is simply narrower than the display. **F7 must
->    not describe the stimuli as fully swept.**
-> 3. **The heatmap block's denominator is 6214**, not 1062: `Σ min(length, 16)` over the scored
->    split, computed from `fixations.json`. That is the number the NSS/CC/KLD mean divides by, and
->    the reason it can never be pooled with the scanpath metrics (D6).
+>    near-saturation on both. Measured: max Y = 1080 → **384.0 exactly**, max X = **1720.8 px →
+>    458.9**, 89.6 % of the metric width. Nothing is mis-scaled; the recorded gaze is narrower than
+>    the display. **F7 must not describe the stimuli as fully swept.**
 >
 > **One test outside F5's tree was changed.** `tests/eve_prep/test_no_upstream_edits.py` asserted
-> `git status ISP SE-Net` was clean, which counted the *new* `ISP/EVE/` branch as an upstream
-> edit. It now excludes that path only; every existing branch and all of SE-Net stay in scope, so
-> an edit to `ResNetCOCO` or to any frozen file still fails there.
+> `git status ISP SE-Net` was clean, which counted the *new* `ISP/EVE/` branch as an upstream edit.
+> It now excludes that path only; every existing branch and all of SE-Net stay in scope, so an edit
+> to `ResNetCOCO` or to any frozen file still fails there.
+>
+> **`tools/eve_eval/check_eval.py` gained `--checkpoint`** after the first cluster attempt. The
+> checkpoint is expected at `<weights-dir>/checkpoints/checkpoint_best.pth`, which is a symlink
+> `bash/test_eve.sh` creates to the released **OSIE free-viewing** `checkpoint_best.pth` — so before
+> the script has ever run, the standalone preflight failed FR3.1 on a file that was not really
+> missing. The flag points it at the released one directly.
 
 Depends on F3 ✓ and **F4's extraction run** (F4's code is complete; OPEN-5 and OPEN-6 both
 resolved). Implements Stage D+E for our data; satisfies
@@ -856,6 +889,24 @@ artefacts alone, and is the natural test harness for F1/F5 (D5).
       pair alongside them reads as corroboration that does not exist. [TechStack.md](TechStack.md) §4.
 - [ ] Carry `bridge_report.json`'s counters into the write-up: `short_scanpath` (padded inside the
       frozen evaluator, D7), `clamped_coords`, `incomplete_stimulus`, `stimulus_image_conflict`.
+- [ ] **State the SED / STDE length confound** *(added 2026-09-15, from F5's run)*. SED is a string
+      edit distance and is **not length-normalised**, so a dataset with shorter ground-truth
+      scanpaths scores lower for free. EVE's scored split averages **5.85 fixations, maximum 10**,
+      against OSIE's longer paths. F5's SED of **5.84** therefore must **not** be read as the model
+      doing better here than F1's OSIE **7.34** — the two are not on a comparable scale. The same
+      caveat applies to STDE. Either normalise, or say plainly that the SED/STDE row is not
+      cross-dataset comparable.
+- [ ] **Quote the retrieval CHANCE baseline next to the retrieval numbers** *(added 2026-09-15)*. At
+      `subject_num = 3` chance is **R@1 = 33.33 %** and **MRR = (1 + 1/2 + 1/3)/3 = 0.6111**. F5
+      measured **R@1 35.62 %** and **MRR 0.6243**. Without the baseline beside them an MRR of 0.62
+      reads as a strong result; against it the margin is small. Whether that margin is significant
+      is **not** settled — the three ranks per image come from one score matrix and are not
+      independent, so a naive binomial SE understates the error. F6/F7 must do this properly rather
+      than quoting the raw percentages.
+- [ ] **State that the NSS/CC/KLD block carries no seed variance** *(added 2026-09-15)*. It scores
+      `all_actions_prob`, which is deterministic; only the scanpath sampling is stochastic. All
+      three seeds returned bitwise-identical NSS/CC/KLD, which is correct and must be explained
+      rather than presented as a triple confirmation.
 
 ---
 
